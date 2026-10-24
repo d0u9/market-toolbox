@@ -62,9 +62,9 @@ class DailyBarProvider(Protocol):
         ...
 
 
-def get_provider(name: str, timeout_seconds: float) -> DailyBarProvider:
+def get_provider(name: str, timeout_seconds: float, cache_dir=None) -> DailyBarProvider:
     if name == "yahoo":
         from providers.yahoo import YahooProvider
 
-        return YahooProvider(timeout_seconds=timeout_seconds)
+        return YahooProvider(timeout_seconds=timeout_seconds, cache_dir=cache_dir)
     raise ValueError(f"data provider {name!r} is not implemented")

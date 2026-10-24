@@ -55,8 +55,6 @@ def validate_bars(
         result.errors.append("duplicate session dates")
     if index != sorted(index):
         result.errors.append("session dates are not increasing")
-    if target not in set(index):
-        raise TargetMissing(f"target session {target} not in provider data")
 
     prices = bars[["open", "high", "low", "close"]].to_numpy(dtype="float64")
     volume = bars["volume"].to_numpy(dtype="float64")
@@ -80,6 +78,10 @@ def validate_bars(
 
     if result.errors:
         return result
+    # Checked after the structural checks so bad data is reported as a
+    # validation failure rather than as "still waiting for the target day".
+    if target not in set(index):
+        raise TargetMissing(f"target session {target} not in provider data")
 
     head_missing = bool(expected) and index[0] > expected[0]
     if len(index) < required_bars:

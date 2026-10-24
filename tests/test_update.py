@@ -347,3 +347,35 @@ def test_new_target_shows_waiting_before_attempt(env):
     provider.errors["TEST1"] = [NetworkError("down")]
     updater.process_symbol("TEST1", THU, NOW_THU)
     assert state(conn)["status"] == STATUS_WAITING
+
+
+def test_invalid_exceptions_at_startup_use_last_valid_version(env):
+    cfg, conn, provider, updater = env
+    cfg.calendar_exceptions_path.write_text(
+        "closures:\n  - {date: '2025-06-02', reason: confirmed test closure}\n", encoding="utf-8"
+    )
+    updater.tick(NOW_WED)
+    good_version = updater.exceptions.version
+    cfg.calendar_exceptions_path.write_text("closures: [\n", encoding="utf-8")
+    restarted = Updater(cfg, conn, provider)  # worker restart with a broken file
+    assert restarted.exceptions.version == good_version
+    assert D(2025, 6, 2) in restarted.exceptions.closures
+    assert D(2025, 6, 2) not in restarted.calendar.sessions(D(2025, 6, 1), D(2025, 6, 4))
+
+
+def test_invalid_exceptions_on_first_ever_start(tmp_path, caplog):
+    cfg = make_config(tmp_path)
+    cfg.calendar_exceptions_path.write_text("closures: [\n", encoding="utf-8")
+    conn = storage.connect_rw(cfg.sqlite_path)
+    updater = Updater(cfg, conn, FakeProvider())
+    assert updater.exceptions.closures == {}
+    assert "no earlier valid calendar exceptions" in caplog.text
+    conn.close()
+
+
+def test_target_cache_follows_market_date(env):
+    cfg, conn, provider, updater = env
+    cal = updater.calendar
+    assert cal.target_session(NOW_WED, 30) == WED
+    assert cal.target_session(NOW_THU, 30) == THU
+    assert cal.target_session(et(2025, 10, 16, 9), 30) == WED

@@ -2,6 +2,6 @@
 data/
 **/__pycache__/
 .pytest_cache/
-*.local.json
+**/*.local.json
 .env
 .env.*

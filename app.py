@@ -1,15 +1,20 @@
-"""Streamlit dashboard. Reads the local cache only; never calls a data provider."""
+"""Streamlit dashboard. Reads the local cache only; never calls a data provider.
+
+Charts render in the main script run and are rebuilt only when a published
+snapshot changes. Small fragments poll the database every 60 seconds for
+status and trigger a full rerun when a new snapshot appears, so an unchanged
+chart is not re-sent to the browser every minute.
+"""
 
 from __future__ import annotations
 
 import datetime as dt
-import html
 
 import pandas as pd
 import streamlit as st
 
 import storage
-from charts import RANGES, STATE_COLORS, STATE_SHORT, build_figure, select_range
+from charts import RANGES, STATE_COLORS, STATE_LABELS, build_figure, select_range
 from config import ConfigError, load_config
 from services.validation import QUALITY_COMPLETE, QUALITY_GAP, QUALITY_INSUFFICIENT
 
@@ -24,7 +29,8 @@ QUALITY_TEXT = {
     QUALITY_GAP: "History gap",
     QUALITY_INSUFFICIENT: "Insufficient history",
 }
-
+REFRESH_SECONDS = 60
+WORKER_STALE_AFTER = dt.timedelta(minutes=5)
 
 try:
     CFG = load_config()
@@ -35,6 +41,10 @@ except ConfigError as exc:
 
 TITLE = f"{' / '.join(CFG.symbols)} Elder Impulse"
 st.set_page_config(page_title=TITLE, layout="wide")
+
+# (snapshot id, content hash): ids restart at 1 when the database is recreated,
+# so the hash is part of every cache key.
+SnapshotKey = tuple[int, str]
 
 
 def fmt_ts(value: str | None) -> str:
@@ -50,9 +60,27 @@ def open_connection():
     return storage.connect_ro(CFG.sqlite_path)
 
 
+def database_ready() -> bool:
+    try:
+        conn = open_connection()
+    except Exception:
+        return False
+    try:
+        conn.execute("SELECT 1 FROM symbol_state LIMIT 1")
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
+def snapshot_key(snapshot: dict | None) -> SnapshotKey | None:
+    return None if snapshot is None else (snapshot["id"], snapshot["content_hash"])
+
+
 @st.cache_data(max_entries=8, show_spinner=False)
-def load_values(snapshot_id: int) -> pd.DataFrame:
-    # Snapshot rows are immutable, so the snapshot id is a complete cache key.
+def load_values(snapshot_id: int, content_hash: str) -> pd.DataFrame:
+    # Snapshot rows are immutable, so (id, hash) is a complete cache key.
     conn = open_connection()
     try:
         return storage.read_values(conn, snapshot_id)
@@ -61,9 +89,9 @@ def load_values(snapshot_id: int) -> pd.DataFrame:
 
 
 @st.cache_data(max_entries=32, show_spinner=False)
-def cached_figure(snapshot_id: int, symbol: str, range_key: str, chart_type: str,
-                  show_ema26: bool, show_macd: bool):
-    view = select_range(load_values(snapshot_id), range_key)
+def cached_figure(snapshot_id: int, content_hash: str, symbol: str, range_key: str,
+                  chart_type: str, show_ema26: bool, show_macd: bool):
+    view = select_range(load_values(snapshot_id, content_hash), range_key)
     return build_figure(view, symbol, chart_type, show_ema26, show_macd)
 
 
@@ -78,62 +106,39 @@ def quality_line(state: dict, gap_in_display: bool) -> str:
     return text
 
 
-CARD_CSS = """
-<style>
-.elder-head {display:flex; flex-wrap:wrap; align-items:center; gap:0.5rem 0.9rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#495057;}
-.elder-head .sym {font-size:1.6rem; font-weight:700; color:#212529;}
-.elder-head .pill {color:#fff; font-weight:600; border-radius:999px; padding:0.15rem 0.75rem;
-  font-family: inherit;}
-.elder-head .kv b {color:#212529; font-weight:600;}
-.elder-head .dot {display:inline-block; width:0.6rem; height:0.6rem; border-radius:2px;
-  margin-right:0.25rem; vertical-align:baseline;}
-.elder-sub {font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size:0.85rem; color:#6c757d; margin-top:0.2rem;}
-</style>
-"""
-PILL_TEXT = {"green": "Green · EMA13 ↑ hist ↑", "red": "Red · EMA13 ↓ hist ↓",
-             "blue": "Blue · mixed", "unavailable": "n/a"}
+def change(cur: float, prev: float) -> str:
+    return f"{cur - prev:+.3f}"
 
 
-def header_html(symbol: str, values: pd.DataFrame, show_ema26: bool) -> str:
+def render_symbol(conn, symbol: str, opts: dict) -> tuple[str | None, SnapshotKey | None, bool]:
+    """Header and chart. Returns (latest session, snapshot key, gap in display)."""
+    _, snapshot = storage.read_symbol(conn, symbol)
+    key = snapshot_key(snapshot)
+    st.subheader(symbol)
+    if snapshot is None:
+        st.info("Initializing: no data published yet. The page refreshes automatically.")
+        return None, key, False
+
+    values = load_values(*key)
+    if values.empty:  # snapshot replaced between reads; the status panel reruns the page
+        st.info("Refreshing data…")
+        return None, key, False
     last = values.iloc[-1]
     prev = values.iloc[-2] if len(values) > 1 else last
-    state, prev_state = last["elder_state"], prev["elder_state"]
-    day = (last["close"] / prev["close"] - 1) * 100
-    ema26 = f"<span class='kv'>EMA26 <b>{last['ema26']:.2f}</b></span>" if show_ema26 else ""
-    return (
-        "<div class='elder-head'>"
-        f"<span class='sym'>{html.escape(symbol)}</span>"
-        f"<span class='pill' style='background:{STATE_COLORS[state]}'>{PILL_TEXT[state]}</span>"
-        f"<span class='kv'>Close <b>{last['close']:.2f}</b> ({day:+.2f}%)</span>"
-        f"<span class='kv'>EMA13 <b>{last['ema13']:.2f}</b> ({last['ema13'] - prev['ema13']:+.2f})</span>"
-        f"{ema26}"
-        f"<span class='kv'>Hist <b>{last['histogram']:.3f}</b> "
-        f"({last['histogram'] - prev['histogram']:+.3f})</span>"
-        f"<span class='kv'>Prev day <span class='dot' style='background:{STATE_COLORS[prev_state]}'>"
-        f"</span>{STATE_SHORT[prev_state]}</span>"
-        "</div>"
-        f"<div class='elder-sub'>{values.index[-1].isoformat()} · adjusted prices · "
-        "candle and bar colors show the Elder state, not up/down days</div>"
+    latest = values.index[-1]
+
+    elder = last["elder_state"]
+    color = STATE_COLORS.get(elder, "#888888")
+    st.markdown(
+        f"**{latest.isoformat()}** · adjusted close **{last['close']:.2f}** "
+        f"({(last['close'] / prev['close'] - 1) * 100:+.2f}%)  \n"
+        f"<span style='display:inline-block;width:0.8em;height:0.8em;border-radius:2px;"
+        f"background:{color};margin-right:0.4em'></span>Elder state: **{STATE_LABELS[elder]}**",
+        unsafe_allow_html=True,
     )
-
-
-def render_symbol(conn, symbol: str, opts: dict) -> str | None:
-    state, snapshot = storage.read_symbol(conn, symbol)
-    if state is None or snapshot is None:
-        st.subheader(symbol)
-        st.info("Initializing: no data published yet. The page refreshes automatically.")
-        if state and state.get("status_detail"):
-            st.caption(state["status_detail"])
-        return None
-
-    values = load_values(snapshot["id"])
-    if values.empty:  # snapshot replaced between reads; next refresh catches up
-        load_values.clear()
-        st.info("Refreshing data…")
-        return None
-    st.markdown(header_html(symbol, values, opts["ema26"]), unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    c1.metric("EMA13", f"{last['ema13']:.2f}", change(last["ema13"], prev["ema13"]))
+    c2.metric("MACD histogram", f"{last['histogram']:.3f}", change(last["histogram"], prev["histogram"]))
 
     view = select_range(values, opts["range"])
     gap_in_display = bool(select_range(values, "3Y")["quality_flag"].astype(bool).any())
@@ -142,9 +147,28 @@ def render_symbol(conn, symbol: str, opts: dict) -> str | None:
     else:
         if view["quality_flag"].astype(bool).any():
             st.warning("Data has a gap; indicators may be affected.")
-        fig = cached_figure(snapshot["id"], symbol, opts["range"], opts["chart"],
-                            opts["ema26"], opts["macd"])
+        fig = cached_figure(*key, symbol, opts["range"], opts["chart"], opts["ema26"], opts["macd"])
         st.plotly_chart(fig, use_container_width=True, key=f"chart-{symbol}")
+    return latest.isoformat(), key, gap_in_display
+
+
+@st.fragment(run_every=REFRESH_SECONDS)
+def status_panel(symbol: str, shown_key: SnapshotKey | None, gap_in_display: bool) -> None:
+    try:
+        conn = open_connection()
+    except Exception as exc:
+        st.warning(f"Database not readable: {exc}")
+        return
+    try:
+        state, snapshot = storage.read_symbol(conn, symbol)
+    finally:
+        conn.close()
+    if snapshot_key(snapshot) != shown_key:
+        st.rerun(scope="app")  # a new snapshot was published: redraw the chart
+    if state is None or snapshot is None:
+        if state and state.get("status_detail"):
+            st.caption(state["status_detail"])
+        return
 
     status = state["status"]
     lines = [
@@ -164,11 +188,36 @@ def render_symbol(conn, symbol: str, opts: dict) -> str | None:
             st.warning(lines[0])
         lines = lines[1:]
     st.caption("  \n".join(lines))
-    return snapshot["latest_session"]
+
+
+@st.fragment(run_every=REFRESH_SECONDS)
+def page_status() -> None:
+    try:
+        conn = open_connection()
+        try:
+            heartbeat = storage.get_meta(conn, "worker_heartbeat")
+        finally:
+            conn.close()
+    except Exception:
+        heartbeat = None
+    seen = storage.parse_ts(heartbeat)
+    now = dt.datetime.now(dt.timezone.utc)
+    if seen is None or now - seen > WORKER_STALE_AFTER:
+        st.warning(f"The update worker has not checked in since {fmt_ts(heartbeat)}. "
+                   "Data will not refresh until it is running again.")
+    st.caption(f"Page checked {now.astimezone(CFG.display_tz).strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
+
+@st.fragment(run_every=REFRESH_SECONDS)
+def wait_for_database() -> None:
+    if database_ready():
+        st.rerun(scope="app")
+    st.info("Initializing: waiting for the worker to create the database.")
 
 
 st.title(TITLE)
-st.caption(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern market dates.")
+st.caption(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern market dates. "
+           "Colors show the Elder Impulse state, not up/down days.")
 
 with st.sidebar:
     opts = {
@@ -179,40 +228,25 @@ with st.sidebar:
         "macd": st.checkbox("Show MACD histogram", value=True),
     }
 
+if not database_ready():
+    wait_for_database()
+    st.stop()
 
-@st.fragment(run_every=60)
-def dashboard() -> None:
-    try:
-        conn = open_connection()
-    except FileNotFoundError:
-        st.info("Initializing: waiting for the worker to create the database.")
-        return
-    except Exception as exc:  # e.g. locked during first initialization
-        st.warning(f"Database not ready yet: {exc}")
-        return
-    try:
-        render_all(conn)
-    except Exception as exc:
-        if "no such table" in str(exc):
-            st.info("Initializing: waiting for the worker to create the database schema.")
-        else:
-            st.error(f"Could not read the local data: {exc}")
-    finally:
-        conn.close()
-
-
-def render_all(conn) -> None:
-    st.markdown(CARD_CSS, unsafe_allow_html=True)
+conn = open_connection()
+try:
     cols = st.columns(len(CFG.symbols))
     dates = []
     for col, symbol in zip(cols, CFG.symbols):
-        with col, st.container(border=True):
-            dates.append(render_symbol(conn, symbol, opts))
-    known = {d for d in dates if d}
-    if len(known) > 1:
-        st.warning("Data dates differ between symbols: "
-                   + ", ".join(f"{s} {d}" for s, d in zip(CFG.symbols, dates) if d))
-    st.caption(f"Page checked {dt.datetime.now(CFG.display_tz).strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        with col:
+            latest, key, gap_in_display = render_symbol(conn, symbol, opts)
+            status_panel(symbol, key, gap_in_display)
+            dates.append(latest)
+except Exception as exc:
+    st.error(f"Could not read the local data: {exc}")
+finally:
+    conn.close()
 
-
-dashboard()
+if len({d for d in dates if d}) > 1:
+    st.warning("Data dates differ between symbols: "
+               + ", ".join(f"{s} {d}" for s, d in zip(CFG.symbols, dates) if d))
+page_status()

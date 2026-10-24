@@ -162,6 +162,11 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
+def touch_heartbeat(conn: sqlite3.Connection, now: dt.datetime) -> None:
+    with transaction(conn):
+        set_meta(conn, "worker_heartbeat", iso(now))
+
+
 def get_state(conn: sqlite3.Connection, symbol: str) -> dict[str, Any]:
     row = conn.execute("SELECT * FROM symbol_state WHERE symbol = ?", (symbol,)).fetchone()
     if row is None:

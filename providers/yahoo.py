@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 
 import pandas as pd
 
@@ -21,8 +22,16 @@ ADJUSTMENT = "auto_adjust"
 class YahooProvider:
     name = "yahoo"
 
-    def __init__(self, timeout_seconds: float = 30) -> None:
+    def __init__(self, timeout_seconds: float = 30, cache_dir: Path | None = None) -> None:
         self.timeout_seconds = timeout_seconds
+        if cache_dir is not None:
+            # yfinance caches time zones and cookies under the user's cache
+            # directory, which a container user without a home cannot write;
+            # it then silently re-requests them every time.
+            import yfinance as yf
+
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            yf.set_tz_cache_location(str(cache_dir))
 
     def fetch_daily(
         self, symbol: str, start_date: dt.date, end_date_exclusive: dt.date

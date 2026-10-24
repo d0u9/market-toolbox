@@ -122,3 +122,10 @@ def test_gap_flags_cover_next_100_bars():
     first = list(kept).index(EXPECTED[201])
     assert flags.iloc[first] == 1 and flags.iloc[first - 1] == 0
     assert flags.iloc[first + GAP_AFFECTED_BARS] == 0
+
+
+def test_bad_data_without_target_is_a_validation_error_not_waiting():
+    b = bars(EXPECTED[:-1])
+    b = b.iloc[list(range(len(b))) + [10]].sort_index()  # duplicate and target missing
+    r = validate_bars(b, EXPECTED, TARGET, 100)
+    assert not r.ok and "duplicate" in r.errors[0]

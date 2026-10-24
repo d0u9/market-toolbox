@@ -21,8 +21,7 @@ from services.calendar import (
     CalendarExceptions,
     CalendarExceptionsError,
     MarketCalendar,
-    file_hash,
-    load_exceptions,
+    parse_exceptions,
     years_before,
 )
 
@@ -88,28 +87,64 @@ class Updater:
     # -- calendar exceptions ------------------------------------------------
 
     def refresh_exceptions(self) -> bool:
-        """Reload the exceptions file when its hash changes. True if reloaded."""
-        current = file_hash(self.cfg.calendar_exceptions_path)
+        """Reload the exceptions file when its content changes. True if reloaded.
+
+        A file that fails to parse keeps the previous version. At startup the
+        previous version is the last valid text stored in the database.
+        """
+        path = self.cfg.calendar_exceptions_path
+        try:
+            raw: bytes | None = path.read_bytes()
+        except FileNotFoundError:
+            raw = None
+        current = "missing" if raw is None else hashlib.sha256(raw).hexdigest()
         if current == self._exceptions_file_hash:
             return False
         first_load = self._exceptions_file_hash is None
         self._exceptions_file_hash = current
         try:
-            exceptions = load_exceptions(self.cfg.calendar_exceptions_path)
+            if raw is None:
+                exceptions = CalendarExceptions(version="missing")
+            else:
+                try:
+                    text = raw.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise CalendarExceptionsError(f"{path}: not valid UTF-8: {exc}") from None
+                exceptions = parse_exceptions(text, str(path))
         except CalendarExceptionsError as exc:
             log.error("calendar exceptions not reloaded, keeping previous version: %s", exc)
+            if first_load:
+                self._load_stored_exceptions()
             return False
-        self.exceptions = exceptions
-        self.calendar = MarketCalendar(self.cfg.market_calendar, exceptions)
+
+        self._use_exceptions(exceptions)
         stored = storage.get_meta(self.conn, "exceptions_version")
-        if not first_load or (stored is not None and stored != exceptions.version):
-            log.info("calendar exceptions changed (version %s); forcing recalculation", exceptions.version)
-            with storage.transaction(self.conn):
+        with storage.transaction(self.conn):
+            if not first_load or (stored is not None and stored != exceptions.version):
+                log.info("calendar exceptions changed (version %s); forcing recalculation",
+                         exceptions.version)
                 for symbol in self.cfg.symbols:
                     storage.update_state(self.conn, symbol, force_refresh=1, next_attempt_at=None)
-        with storage.transaction(self.conn):
             storage.set_meta(self.conn, "exceptions_version", exceptions.version)
+            storage.set_meta(self.conn, "exceptions_text", "" if raw is None else raw.decode("utf-8"))
         return True
+
+    def _use_exceptions(self, exceptions: CalendarExceptions) -> None:
+        self.exceptions = exceptions
+        self.calendar = MarketCalendar(self.cfg.market_calendar, exceptions)
+
+    def _load_stored_exceptions(self) -> None:
+        version = storage.get_meta(self.conn, "exceptions_version")
+        text = storage.get_meta(self.conn, "exceptions_text")
+        if version is None or text is None:
+            log.error("no earlier valid calendar exceptions stored; running without exceptions")
+            return
+        if version == "missing":
+            exceptions = CalendarExceptions(version="missing")
+        else:
+            exceptions = parse_exceptions(text, "stored calendar exceptions")
+        self._use_exceptions(exceptions)
+        log.warning("using the last valid calendar exceptions (version %s)", exceptions.version)
 
     # -- scheduling ---------------------------------------------------------
 

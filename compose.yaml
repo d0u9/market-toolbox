@@ -18,6 +18,13 @@ x-app: &app
   environment:
     MARKET_TOOLBOX_CONFIG: /app/config.runtime.json
     TZ: UTC
+  # Hardening: read-only image filesystem; only ./data and /tmp are writable.
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
   volumes:
     - ./data:/app/data:rw
     - ${MARKET_TOOLBOX_CONFIG_FILE:-./config.json}:/app/config.runtime.json:ro
@@ -27,6 +34,8 @@ services:
   worker:
     <<: *app
     command: ["python", "worker.py"]
+    # Lets an in-flight request (up to request_timeout_seconds) finish on stop.
+    stop_grace_period: 45s
 
   web:
     <<: *app

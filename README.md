@@ -26,7 +26,8 @@ storage.py                SQLite schema, atomic publish, read queries
 locking.py                Single-writer lock (POSIX fcntl.flock)
 charts.py                 Plotly figures
 tests/                    Synthetic-data tests (no network)
-data/                     Runtime data (not committed): database, WAL/SHM, exports, lock
+data/                     Runtime data (not committed): database, WAL/SHM, exports,
+                          writer lock, provider cache
 ```
 
 ## Configuration
@@ -64,6 +65,8 @@ python -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 python -m pytest
 python worker.py --once      # one manual update (shares the writer lock)
+                             # exit 0 ok, 1 not up to date, 2 bad config,
+                             # 3 another writer running, 4 data dir not writable
 python worker.py             # keep running; checks every 60 seconds
 streamlit run app.py
 ```
@@ -80,6 +83,8 @@ docker compose up -d --build
   `/app/data`. SQLite needs the directory writable for its WAL/SHM files.
   The web app still opens the database with `mode=ro` and never writes.
   Everything in `./data` survives restarts, rebuilds and upgrades.
+- Containers run with a read-only image filesystem, all capabilities dropped
+  and `no-new-privileges`; only `./data` and a `/tmp` tmpfs are writable.
 - The page binds to `127.0.0.1:8501` only. Reach it through a VPN or an SSH
   tunnel. To expose it publicly, put a reverse proxy in front with HTTPS and
   authentication, and make sure WebSockets are forwarded (Streamlit needs them).
@@ -151,6 +156,10 @@ alone while the worker runs can miss data still in the WAL file.
 
 Troubleshooting:
 - Page says "Initializing": the worker has not published yet. Check its logs.
+- "The update worker has not checked in": the worker has been down for more
+  than 5 minutes; the page keeps showing the last published data.
+- Worker exits with "cannot write to the data directory": make `./data`
+  writable by the container user (`APP_UID`/`APP_GID`).
 - "Waiting for data": the target session is not available from the source
   yet. Retries run after 5, 15 and 30 minutes, then hourly, up to 8 attempts
   in total. After that, one recovery attempt runs each day at 08:00 New York time.

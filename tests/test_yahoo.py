@@ -34,3 +34,15 @@ def test_missing_column_rejected():
 ])
 def test_error_classification(exc, kind):
     assert type(classify_error(exc)) is kind
+
+
+def test_provider_cache_dir_is_created_and_used(tmp_path):
+    import yfinance.cache as yfc
+
+    from providers.yahoo import YahooProvider
+
+    cache = tmp_path / "provider-cache"
+    YahooProvider(timeout_seconds=5, cache_dir=cache)
+    assert cache.is_dir()
+    yfc.get_tz_cache().store("TEST1", "America/New_York")
+    assert yfc.get_tz_cache().lookup("TEST1") == "America/New_York"

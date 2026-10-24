@@ -69,8 +69,16 @@ class Config:
         return ZoneInfo(self.display_timezone)
 
     @property
+    def data_dir(self) -> Path:
+        return self.sqlite_path.parent
+
+    @property
     def lock_path(self) -> Path:
-        return self.sqlite_path.parent / ".worker.lock"
+        return self.data_dir / ".worker.lock"
+
+    @property
+    def provider_cache_dir(self) -> Path:
+        return self.data_dir / "provider-cache"
 
 
 def resolve_config_path(environ: dict[str, str] | None = None) -> Path:
