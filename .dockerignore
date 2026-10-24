@@ -5,3 +5,5 @@ data/
 **/*.local.json
 .env
 .env.*
+.claude/
+.codex/
