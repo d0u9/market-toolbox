@@ -107,6 +107,8 @@ _PAGE = """<!doctype html>
   #legend { font-size: 12px; color: #52525b; line-height: 1.5; font-variant-numeric: tabular-nums; }
   #legend b { color: #09090b; font-weight: 600; }
   #key { font-size: 11px; color: #71717a; line-height: 1.5; }
+  .hint { margin-left: 12px; color: #a1a1aa; }
+  @media (hover: none) { .hint { display: none; } }
   .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin: 0 3px 0 8px; }
 </style></head>
 <body><div id="top"><div id="legend"></div><div id="key"></div></div><div id="chart"></div>
@@ -153,6 +155,14 @@ if (P.visible_from) {
   chart.timeScale().setVisibleRange({ from: P.visible_from, to: P.price[P.price.length - 1].time });
 }
 
+// A plain mouse wheel scrolls the page; zoom and pan by wheel need Ctrl or ⌘
+// (a trackpad pinch arrives as Ctrl + wheel). Stopping the event in the capture
+// phase keeps it from the chart without preventDefault, so the scroll reaches
+// the parent page. Drag to pan and touch gestures are unchanged.
+window.addEventListener("wheel", e => {
+  if (!e.ctrlKey && !e.metaKey) e.stopPropagation();
+}, { capture: true });
+
 // Static color key and a legend that follows the crosshair (last bar by default).
 const key = document.getElementById("key");
 key.append("Color = Elder state");
@@ -160,6 +170,9 @@ for (const [name, color] of Object.entries(P.state_colors)) {
   const sw = document.createElement("span"); sw.className = "sw"; sw.style.background = color;
   key.append(sw, name);
 }
+const hint = document.createElement("span"); hint.className = "hint";
+hint.textContent = "Ctrl/⌘ + scroll to zoom";
+key.append(hint);
 const byTime = {};
 P.price.forEach((p, i) => { byTime[p.time] = i; });
 const fmt = (v, d) => v === undefined ? "–" : v.toFixed(d);
