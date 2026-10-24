@@ -28,13 +28,13 @@ def seeded(tmp_path, monkeypatch):
 
 
 def shown_symbol(at):
-    heroes = [m.value for m in at.markdown if "class='sym'" in m.value]
-    assert len(heroes) == 1
-    return heroes[0].split("class='sym'>")[1].split("<")[0]
+    return at.subheader[0].value
 
 
-def run_app():
+def run_app(symbol=None):
     at = AppTest.from_file(APP, default_timeout=60)
+    if symbol:
+        at.query_params["symbol"] = symbol
     at.run()
     assert not at.exception
     return at
@@ -45,7 +45,7 @@ def test_page_renders_first_symbol(seeded):
     at = run_app()
     assert shown_symbol(at) == "TEST1"
     assert not any("worker has not checked in" in w.value for w in at.warning)
-    assert sum("Update status: **Updated**" in c.value for c in at.caption) == 1
+    assert any("Target session: 2025-10-15" in c.value for c in at.caption)
 
 
 def test_stale_worker_is_reported(seeded):
@@ -71,15 +71,12 @@ def test_any_number_of_symbols(tmp_path, monkeypatch):
     conn = storage.connect_rw(cfg.sqlite_path)
     Updater(cfg, conn, FakeProvider(), rng=random.Random(0)).tick(et(2025, 10, 15, 17))
     conn.close()
-    at = run_app()
-    assert at.sidebar.radio[0].options == ["TEST1", "FAKEA", "FAKEB"]
-    assert shown_symbol(at) == "TEST1"
-    at.sidebar.radio[0].set_value("FAKEB").run()
-    assert not at.exception
-    assert shown_symbol(at) == "FAKEB"
+    assert shown_symbol(run_app()) == "TEST1"
+    assert shown_symbol(run_app("FAKEB")) == "FAKEB"
+    assert shown_symbol(run_app("NOPE")) == "TEST1"  # unknown symbol falls back
 
 
-def test_many_symbols_use_a_dropdown(tmp_path, monkeypatch):
+def test_many_symbols_render(tmp_path, monkeypatch):
     symbols = [f"FAKE{i}" for i in range(21)]
     path = tmp_path / "config.json"
     path.write_text(json.dumps({**TEST_CONFIG, "symbols": symbols}), encoding="utf-8")
@@ -87,6 +84,5 @@ def test_many_symbols_use_a_dropdown(tmp_path, monkeypatch):
     conn = storage.connect_rw(load_config(path).sqlite_path)
     storage.ensure_symbols(conn, tuple(symbols))
     conn.close()
-    at = run_app()
-    assert not at.sidebar.radio or at.sidebar.radio[0].label != "Symbol"
-    assert at.sidebar.selectbox[0].options == symbols
+    at = run_app("FAKE20")
+    assert shown_symbol(at) == "FAKE20"

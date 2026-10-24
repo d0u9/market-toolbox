@@ -2,7 +2,9 @@
 
 A self-hosted dashboard that shows the daily Elder Impulse state of any list
 of US-listed tickers (the demo config tracks QQQ and VOO). Pick a symbol in the
-sidebar; the page shows that one symbol. Add a symbol by adding it to
+sidebar; the page shows that one symbol, and the URL (`?symbol=QQQ`) links
+straight to it. The UI uses [streamlit-shadcn-ui](https://github.com/ObservedObserver/streamlit-shadcn-ui)
+(MIT) components. Add a symbol by adding it to
 `symbols` in the config; nothing else changes.
 After each US trading session a background worker fetches daily bars, validates
 them, computes EMA13 / MACD(12,26,9) and publishes a snapshot to SQLite. A

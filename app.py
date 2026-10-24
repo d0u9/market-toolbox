@@ -13,9 +13,10 @@ import datetime as dt
 import pandas as pd
 import streamlit as st
 
+import streamlit_shadcn_ui as ui
+
 import storage
-import ui_theme
-from charts import RANGES, STATE_COLORS, STATE_LABELS, build_figure, select_range
+from charts import RANGES, STATE_LABELS, build_figure, select_range
 from config import ConfigError, load_config
 from services import status
 from services.status import QUALITY_TEXT, STATUS_TEXT
@@ -91,14 +92,11 @@ def quality_line(state: dict, gap_in_display: bool) -> str:
     quality = state["quality"]
     if quality == status.QUALITY_GAP and not gap_in_display:
         # The affected bars have scrolled out of every display range.
-        return "Data quality: **Complete** (an older gap is kept in the run records)"
-    text = f"Data quality: **{QUALITY_TEXT.get(quality, quality)}**"
-    if state.get("quality_message"):
-        text += f" — {state['quality_message']}"
-    return text
+        return "Data complete in view"
+    return f"Data: {QUALITY_TEXT.get(quality, quality)}"
 
 
-def render_symbol(conn, symbol: str, opts: dict) -> tuple[str | None, SnapshotKey | None, bool]:
+def render_symbol(conn, symbol: str) -> tuple[str | None, SnapshotKey | None, bool]:
     """Header and chart. Returns (latest session, snapshot key, gap in display)."""
     _, snapshot = storage.read_symbol(conn, symbol)
     key = snapshot_key(snapshot)
@@ -117,26 +115,44 @@ def render_symbol(conn, symbol: str, opts: dict) -> tuple[str | None, SnapshotKe
 
     elder = last["elder_state"]
     label, _, detail = STATE_LABELS[elder].partition(" (")
-    st.markdown(ui_theme.hero_html(
-        symbol, latest.isoformat(), float(last["close"]),
-        float((last["close"] / prev["close"] - 1) * 100),
-        STATE_COLORS.get(elder, "#868e96"), label, detail.rstrip(")"),
-    ), unsafe_allow_html=True)
-    st.markdown(ui_theme.tiles_html([
-        ("EMA13", float(last["ema13"]), float(last["ema13"] - prev["ema13"]), ".2f"),
-        ("MACD histogram", float(last["histogram"]), float(last["histogram"] - prev["histogram"]), ".3f"),
-        ("EMA26", float(last["ema26"]), float(last["ema26"] - prev["ema26"]), ".2f"),
-    ]), unsafe_allow_html=True)
+    st.subheader(symbol, anchor=False)
+    st.caption(f"{latest.isoformat()} · adjusted prices · Elder state: {label} ({detail}")
 
-    view = select_range(values, opts["range"])
+    cols = st.columns(4)
+    stats = [
+        ("Close", f"{last['close']:,.2f}",
+         f"{(last['close'] / prev['close'] - 1) * 100:+.2f}% from previous day"),
+        ("EMA13", f"{last['ema13']:.2f}", f"{last['ema13'] - prev['ema13']:+.2f} from previous day"),
+        ("MACD histogram", f"{last['histogram']:.3f}",
+         f"{last['histogram'] - prev['histogram']:+.3f} from previous day"),
+        ("Elder state", label, detail.rstrip(")")),
+    ]
+    for col, (name, value, description) in zip(cols, stats):
+        with col:
+            ui.metric_card(name, value, description=description, key=f"stat-{symbol}-{name}")
+
     gap_in_display = bool(select_range(values, "3Y")["quality_flag"].astype(bool).any())
-    if len(view) < 2:
-        st.warning("Insufficient history: indicators are not shown.")
-    else:
-        if view["quality_flag"].astype(bool).any():
-            st.warning("Data has a gap; indicators may be affected.")
-        fig = cached_figure(*key, symbol, opts["range"], opts["chart"], opts["ema26"], opts["macd"])
-        with st.container(key="card-chart"):
+    with st.container(border=True):
+        left, right = st.columns([3, 2])
+        with left:
+            range_key = ui.tabs(list(RANGES), value="1Y", key="range", label="Range")
+        with right:
+            chart = ui.tabs(["Candles", "Line"], value="Candles", key="chart", label="Chart type")
+        s1, s2, _ = st.columns([1, 1, 3])
+        with s1:
+            show_ema26 = ui.switch("EMA26", key="ema26")
+        with s2:
+            show_macd = ui.switch("MACD histogram", value=True, key="macd")
+        view = select_range(values, range_key or "1Y")
+        if len(view) < 2:
+            ui.alert("Insufficient history", "Indicators are not shown.", key="insufficient")
+        else:
+            if view["quality_flag"].astype(bool).any():
+                ui.alert("Data has a gap", "Indicators may be affected.", variant="destructive",
+                         key="gap")
+            fig = cached_figure(*key, symbol, range_key or "1Y",
+                                "line" if chart == "Line" else "candles",
+                                bool(show_ema26), bool(show_macd))
             st.plotly_chart(fig, width="stretch", key=f"chart-{symbol}")
     return latest.isoformat(), key, gap_in_display
 
@@ -160,22 +176,22 @@ def status_panel(symbol: str, shown_key: SnapshotKey | None, gap_in_display: boo
         return
 
     current = state["status"]
+    quality = quality_line(state, gap_in_display)
+    ui.badges([(STATUS_TEXT.get(current, current),
+                "default" if current == status.UPDATED else "destructive"),
+               (quality, "secondary")], key=f"badges-{symbol}")
+    if current != status.UPDATED and state.get("status_detail"):
+        ui.alert(STATUS_TEXT.get(current, current), state["status_detail"],
+                 variant="destructive" if current == status.FAILED else "default",
+                 key=f"status-alert-{symbol}")
     lines = [
-        f"Update status: **{STATUS_TEXT.get(current, current)}**"
-        + (f" — {state['status_detail']}" if state.get("status_detail") else ""),
-        quality_line(state, gap_in_display),
+        *([state["quality_message"]] if state.get("quality_message") else []),
         f"Target session: {state['target_session'] or '—'} · latest session: {snapshot['latest_session']}",
         f"Content updated: {fmt_ts(state['content_updated_at'])} · "
         f"last successful check: {fmt_ts(state['last_checked_at'])}",
         f"Source: {snapshot['source']} · adjusted prices ({snapshot['adjustment']}); "
         "values are not historical traded prices",
     ]
-    if current != status.UPDATED:
-        if current == status.FAILED:
-            st.error(lines[0])
-        else:
-            st.warning(lines[0])
-        lines = lines[1:]
     st.caption("  \n".join(lines))
 
 
@@ -204,25 +220,24 @@ def wait_for_database() -> None:
     st.info("Initializing: waiting for the worker to create the database.")
 
 
-st.markdown(ui_theme.PAGE_CSS, unsafe_allow_html=True)
-st.markdown(ui_theme.title_html(TITLE, "daily trend and momentum"), unsafe_allow_html=True)
+st.title(TITLE, anchor=False)
 st.caption(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern market dates. "
            "Colors show the Elder Impulse state, not up/down days.")
 
 with st.sidebar:
     # One symbol per page: a plain list for a few symbols, a searchable
-    # dropdown once the list would get too long for the sidebar.
+    # combobox once the list would get too long for the sidebar.
+    # The selected symbol lives in the URL (?symbol=QQQ) so a page can be
+    # bookmarked or shared.
+    wanted = st.query_params.get("symbol")
+    initial = wanted if wanted in CFG.symbols else CFG.symbols[0]
     if len(CFG.symbols) <= SYMBOL_LIST_MAX:
-        selected = st.radio("Symbol", list(CFG.symbols), key="symbol")
+        selected = ui.radio_group("Symbol", list(CFG.symbols), value=initial, key="symbol")
     else:
-        selected = st.selectbox("Symbol", list(CFG.symbols), key="symbol")
-    opts = {
-        "range": st.radio("Range", list(RANGES), index=2, horizontal=True),
-        "chart": st.radio("Chart", ["candles", "line"],
-                          format_func={"candles": "Candles", "line": "Close line"}.get),
-        "ema26": st.checkbox("Show EMA26", value=False),
-        "macd": st.checkbox("Show MACD histogram", value=True),
-    }
+        selected = ui.combobox("Symbol", list(CFG.symbols), value=initial,
+                               clearable=False, key="symbol")
+    selected = selected if selected in CFG.symbols else initial
+    st.query_params["symbol"] = selected
 
 if not database_ready():
     wait_for_database()
@@ -230,8 +245,8 @@ if not database_ready():
 
 conn = open_connection()
 try:
-    _, key, gap_in_display = render_symbol(conn, selected, opts)
-    with st.container(key="card-status"):
+    _, key, gap_in_display = render_symbol(conn, selected)
+    with st.container(border=True):
         status_panel(selected, key, gap_in_display)
 except Exception as exc:
     st.error(f"Could not read the local data: {exc}")

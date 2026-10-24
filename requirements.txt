@@ -6,3 +6,4 @@ plotly>=5.21,<8
 yfinance>=0.2.54,<2
 pandas_market_calendars>=4.4,<6
 PyYAML>=6,<7
+streamlit-shadcn-ui>=1.4,<2
