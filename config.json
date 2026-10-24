@@ -1,0 +1,12 @@
+{
+  "symbols": ["QQQ", "VOO"],
+  "data_provider": "yahoo",
+  "market_calendar": "NYSE",
+  "calendar_exceptions_path": "calendar_exceptions.yaml",
+  "display_timezone": "UTC",
+  "history_years": 5,
+  "warmup_bars": 250,
+  "update_delay_minutes": 30,
+  "sqlite_path": "data/market.sqlite3",
+  "log_level": "INFO"
+}
