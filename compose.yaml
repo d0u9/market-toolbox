@@ -10,42 +10,33 @@
 #   MARKET_TOOLBOX_IMAGE        image to run (default: locally built market-toolbox:local),
 #                               e.g. ghcr.io/<owner>/market-toolbox:latest or :dev
 
-x-app: &app
-  build: .
-  image: ${MARKET_TOOLBOX_IMAGE:-market-toolbox:local}
-  restart: unless-stopped
-  user: "${APP_UID:-10001}:${APP_GID:-10001}"
-  environment:
-    MARKET_TOOLBOX_CONFIG: /app/config.runtime.json
-    TZ: UTC
-  # Hardening: read-only image filesystem; only ./data and /tmp are writable.
-  read_only: true
-  tmpfs:
-    - /tmp
-  cap_drop: [ALL]
-  logging:
-    driver: json-file
-    options:
-      max-size: "10m"
-      max-file: "3"
-  security_opt:
-    - no-new-privileges:true
-  volumes:
-    - ./data:/app/data:rw
-    - ${MARKET_TOOLBOX_CONFIG_FILE:-./config.json}:/app/config.runtime.json:ro
-    - ./calendar_exceptions.yaml:/app/calendar_exceptions.yaml:ro
-
 services:
-  worker:
-    <<: *app
-    command: ["python", "worker.py"]
-    # Lets an in-flight request (up to request_timeout_seconds) finish on stop.
-    stop_grace_period: 45s
-
-  web:
-    <<: *app
-    depends_on:
-      - worker
+  app:
+    build: .
+    image: ${MARKET_TOOLBOX_IMAGE:-market-toolbox:local}
+    restart: unless-stopped
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+    environment:
+      MARKET_TOOLBOX_CONFIG: /app/config.runtime.json
+      TZ: UTC
+    # Hardening: read-only image filesystem; only ./data and /tmp are writable.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./data:/app/data:rw
+      - ${MARKET_TOOLBOX_CONFIG_FILE:-./config.json}:/app/config.runtime.json:ro
+      - ./calendar_exceptions.yaml:/app/calendar_exceptions.yaml:ro
+    # Allow the largest configured request timeout (300s) plus cleanup.
+    stop_grace_period: 330s
     ports:
       - "127.0.0.1:${WEB_PORT:-8501}:8501"
     healthcheck:

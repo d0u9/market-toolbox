@@ -93,3 +93,88 @@ def test_symbol_picker_switches_to_search_above_twenty():
 
     assert symbol_picker(1) == symbol_picker(20) == "list"
     assert symbol_picker(21) == symbol_picker(100) == "search"
+
+
+def test_saved_snapshot_refresh_failure_is_visible(seeded, monkeypatch):
+    from providers.base import NetworkError
+
+    cfg = load_config()
+    provider = FakeProvider()
+    provider.errors["TEST1"] = [NetworkError("synthetic refresh outage")]
+    Updater(cfg, seeded, provider).tick(et(2025, 10, 15, 17))
+    assert storage.get_state(seeded, "TEST1")["status"] == "updated"
+    at = run_app()
+    components = "\n".join(node.proto.json for node in at.get("bidi_component"))
+    assert "Refresh failed; showing saved data" in components
+    assert "synthetic refresh outage" in components
+
+
+def rerun_watchlist(at, monkeypatch):
+    from dataclasses import replace
+    import threading
+    from streamlit.runtime.scriptrunner_utils.script_requests import ScriptRequests
+
+    fragment_id = at._fragment_storage.resolve_target("watchlist")[0]
+    original_rerun = ScriptRequests.request_rerun
+
+    def timer_rerun(requests, data):
+        if threading.current_thread() is threading.main_thread():
+            data = replace(data, fragment_id=fragment_id)
+        return original_rerun(requests, data)
+
+    monkeypatch.setattr(ScriptRequests, "request_rerun", timer_rerun)
+    at.run()
+    assert not at.exception
+
+
+def test_watchlist_timer_refreshes_other_symbol_without_rebuilding_chart(tmp_path, monkeypatch):
+    import streamlit as st
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(TEST_CONFIG), encoding="utf-8")
+    monkeypatch.setenv(ENV_VAR, str(path))
+    cfg = load_config(path)
+    conn = storage.connect_rw(cfg.sqlite_path)
+    provider = FakeProvider()
+    provider.available_until["FAKEA"] = dt.date(2025, 10, 14)
+    updater = Updater(cfg, conn, provider, rng=random.Random(0))
+    updater.tick(et(2025, 10, 15, 17))
+    renders = []
+    original_chart = st.iframe
+
+    def chart(*args, **kwargs):
+        renders.append(True)
+        return original_chart(*args, **kwargs)
+
+    monkeypatch.setattr(st, "iframe", chart)
+    try:
+        at = run_app()
+        sidebar = lambda: next(node.proto.json for node in at.get("bidi_component")
+                               if "Watchlist" in node.proto.json)
+        assert "No data yet" in sidebar()
+        selected_snapshot = storage.read_symbol(conn, "TEST1")[1]["id"]
+        provider.available_until.clear()
+        updater.tick(et(2025, 10, 15, 17, 6))
+        assert storage.read_symbol(conn, "TEST1")[1]["id"] == selected_snapshot
+        rerun_watchlist(at, monkeypatch)
+        assert "No data yet" not in sidebar()
+        assert len(renders) == 1
+    finally:
+        conn.close()
+
+
+def test_watchlist_click_changes_symbol_from_fragment(seeded, monkeypatch):
+    from types import SimpleNamespace
+    from streamlit_shadcn_ui.v2.elements import ElementsBuilder
+
+    at = run_app()
+    original_button = ElementsBuilder.button
+
+    def click_other(builder, *args, **kwargs):
+        original_button(builder, *args, **kwargs)
+        return SimpleNamespace(clicked=kwargs.get("key") == "view-FAKEA")
+
+    monkeypatch.setattr(ElementsBuilder, "button", click_other)
+    rerun_watchlist(at, monkeypatch)
+    assert at.query_params["symbol"] == "FAKEA"
+    assert shown_symbol(at) == "FAKEA"

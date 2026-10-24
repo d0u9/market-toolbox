@@ -21,7 +21,7 @@ import sys
 import threading
 
 import storage
-from config import ConfigError, load_config
+from config import Config, ConfigError, load_config
 from locking import LockHeld, WriterLock
 from providers.base import get_provider
 from services import status
@@ -57,6 +57,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     logging.basicConfig(level=cfg.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+    stop = threading.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, lambda *_: stop.set())
+    return run(cfg, stop, once=args.once)
+
+
+def run(cfg: Config, stop: threading.Event, *, once: bool = False) -> int:
+    """Run updates in the calling thread, owning its connection and writer lock."""
     lock = WriterLock(cfg.lock_path)
     try:
         lock.acquire()
@@ -70,34 +78,31 @@ def main(argv: list[str] | None = None) -> int:
                   cfg.data_dir, getattr(os, "getuid", lambda: "?")(), exc)
         return 4
 
-    stop = threading.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(sig, lambda *_: stop.set())
-
     try:
         provider = get_provider(cfg.data_provider, cfg.request_timeout_seconds,
                                 cfg.provider_cache_dir)
         updater = Updater(cfg, conn, provider)
         log.info("worker started for %s using %s", ", ".join(cfg.symbols), cfg.data_provider)
         last_day = None
-        while True:
+        while not stop.is_set():
             now = utcnow()
             try:
-                updater.tick(now)
+                updater.tick(now, stop)
                 storage.touch_heartbeat(conn, now)
                 last_day = daily_housekeeping(conn, cfg, now, last_day)
             except Exception:
                 log.exception("worker tick failed")
-            if args.once or stop.wait(CHECK_INTERVAL_SECONDS):
+            if once or stop.wait(CHECK_INTERVAL_SECONDS):
                 break
-        not_updated = [s for s in cfg.symbols
-                       if storage.get_state(conn, s)["status"] != status.UPDATED]
-        conn.close()
+        if once and not stop.is_set():
+            not_updated = [s for s in cfg.symbols
+                           if storage.get_state(conn, s)["status"] != status.UPDATED]
+            if not_updated:
+                log.warning("not up to date: %s", ", ".join(not_updated))
+                return 1
     finally:
+        conn.close()
         lock.release()
-    if args.once and not_updated:
-        log.warning("not up to date: %s", ", ".join(not_updated))
-        return 1
     return 0
 
 

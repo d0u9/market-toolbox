@@ -26,13 +26,6 @@ class CalendarExceptions:
     version: str = "none"
 
 
-def file_hash(path: Path) -> str:
-    try:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-    except FileNotFoundError:
-        return "missing"
-
-
 def load_exceptions(path: Path) -> CalendarExceptions:
     """Parse the exceptions YAML. A missing file means no exceptions."""
     if not path.exists():

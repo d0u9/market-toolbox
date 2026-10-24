@@ -377,3 +377,43 @@ def test_target_cache_follows_market_date(env):
     assert cal.target_session(NOW_WED, 30) == WED
     assert cal.target_session(NOW_THU, 30) == THU
     assert cal.target_session(et(2025, 10, 16, 9), 30) == WED
+
+
+def test_restart_recalculates_current_snapshot_with_new_settings(env, monkeypatch):
+    from dataclasses import replace
+    from services import indicators
+
+    cfg, conn, provider, updater = env
+    updater.tick(NOW_WED)
+    original = current(conn)["id"]
+    calls = len(provider.calls)
+    monkeypatch.setattr(indicators, "CALCULATION_VERSION", "synthetic-v2")
+    restarted = Updater(replace(cfg, warmup_bars=300), conn, provider)
+    restarted.tick(NOW_WED + dt.timedelta(minutes=1))
+    assert len(provider.calls) == calls + len(cfg.symbols)
+    assert current(conn)["id"] != original
+    assert current(conn)["calculation_version"] == "synthetic-v2"
+    values = storage.read_values(conn, current(conn)["id"])
+    assert values["elder_state"].eq("unavailable").sum() == 300
+    restarted.tick(NOW_WED + dt.timedelta(minutes=2))
+    assert len(provider.calls) == calls + len(cfg.symbols)
+
+
+def test_restart_refresh_keeps_pending_backoff_with_saved_snapshot(env):
+    cfg, conn, provider, updater = env
+    updater.tick(NOW_WED)
+    with storage.transaction(conn):
+        storage.update_state(conn, "TEST1", force_refresh=1)
+    provider.errors["TEST1"] = [NetworkError("synthetic outage")]
+    updater.tick(NOW_WED + dt.timedelta(minutes=1))
+    pending = state(conn)["next_attempt_at"]
+    attempts = state(conn)["attempts"]
+    restarted = Updater(cfg, conn, provider)
+    calls = len(provider.calls)
+    restarted.process_symbol("TEST1", WED, NOW_WED + dt.timedelta(minutes=2))
+    assert len(provider.calls) == calls
+    assert state(conn)["next_attempt_at"] == pending
+    assert state(conn)["attempts"] == attempts
+    restarted.process_symbol("TEST1", WED, storage.parse_ts(pending))
+    assert state(conn)["force_refresh"] == 0
+    assert state(conn)["status_detail"] is None

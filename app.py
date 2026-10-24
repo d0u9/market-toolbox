@@ -202,8 +202,10 @@ def status_panel(symbol: str, shown_key: SnapshotKey | None, gap_in_display: boo
     ui.badges([(STATUS_TEXT.get(current, current),
                 BADGE_VARIANT.get(current, "secondary")),
                (quality, "secondary")], key=f"badges-{symbol}")
-    if current != status.UPDATED and state.get("status_detail"):
-        ui.alert(STATUS_TEXT.get(current, current), state["status_detail"],
+    if state.get("status_detail"):
+        title = ("Refresh failed; showing saved data" if current == status.UPDATED
+                 else STATUS_TEXT.get(current, current))
+        ui.alert(title, state["status_detail"],
                  variant="destructive" if current == status.FAILED else "default",
                  key=f"status-alert-{symbol}")
     lines = [
@@ -259,6 +261,7 @@ def latest_quotes(symbols) -> dict[str, tuple[str, float, float | None] | None]:
     return quotes
 
 
+@st.fragment(run_every=REFRESH_SECONDS, key="watchlist")
 def watchlist_sidebar(symbols, current: str) -> str:
     """Brand card plus one shadcn card per symbol; returns the selected symbol."""
     quotes = latest_quotes(symbols)
@@ -290,8 +293,9 @@ def watchlist_sidebar(symbols, current: str) -> str:
                                 variant="default" if sym == current else "outline", size="sm",
                                 stretch=True)
     for sym, handle in views.items():
-        if handle.clicked:
-            return sym
+        if handle.clicked and sym != current:
+            st.query_params["symbol"] = sym
+            st.rerun(scope="app")
     return current
 
 
@@ -319,9 +323,6 @@ with st.sidebar:
     initial = wanted if wanted in CFG.symbols else CFG.symbols[0]
     if symbol_picker(len(CFG.symbols)) == "list":
         selected = watchlist_sidebar(CFG.symbols, initial)
-        if selected != initial:  # redraw so the sidebar highlights the new symbol
-            st.query_params["symbol"] = selected
-            st.rerun()
     else:
         selected = ui.combobox("Symbol", list(CFG.symbols), value=initial,
                                clearable=False, key="symbol")

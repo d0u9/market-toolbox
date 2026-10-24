@@ -13,5 +13,7 @@
   "sqlite_path": "data/market.sqlite3",
   "run_export_dir": "data/exports",
   "request_timeout_seconds": 30,
-  "log_level": "INFO"
+  "log_level": "INFO",
+  "web_host": "0.0.0.0",
+  "web_port": 8501
 }

@@ -7,6 +7,7 @@ import hashlib
 import logging
 import random
 import sqlite3
+import threading
 
 import pandas as pd
 
@@ -54,6 +55,11 @@ class Updater:
         self.calendar = MarketCalendar(cfg.market_calendar, self.exceptions)
         storage.ensure_symbols(conn, cfg.symbols)
         storage.abandon_running_runs(conn)
+        # Reapply current calculation settings once per startup, keeping backoff.
+        with storage.transaction(conn):
+            for symbol in cfg.symbols:
+                if storage.get_state(conn, symbol)["current_snapshot_id"] is not None:
+                    storage.update_state(conn, symbol, force_refresh=1)
         self.refresh_exceptions()
 
     # -- calendar exceptions ------------------------------------------------
@@ -120,10 +126,12 @@ class Updater:
 
     # -- scheduling ---------------------------------------------------------
 
-    def tick(self, now: dt.datetime) -> None:
+    def tick(self, now: dt.datetime, stop: threading.Event | None = None) -> None:
         self.refresh_exceptions()
         target = self.calendar.target_session(now, self.cfg.update_delay_minutes)
         for symbol in self.cfg.symbols:
+            if stop is not None and stop.is_set():
+                break
             try:
                 self.process_symbol(symbol, target, now)
             except Exception:  # one symbol must never block the other

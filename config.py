@@ -41,6 +41,8 @@ DEFAULTS: dict[str, Any] = {
     "run_export_dir": "data/exports",
     "request_timeout_seconds": 30,
     "log_level": "INFO",
+    "web_host": "0.0.0.0",
+    "web_port": 8501,
 }
 
 
@@ -63,6 +65,8 @@ class Config:
     run_export_dir: Path
     request_timeout_seconds: float
     log_level: str
+    web_host: str
+    web_port: int
 
     @property
     def display_tz(self) -> ZoneInfo:
@@ -132,6 +136,8 @@ def build_config(raw: dict[str, Any], config_path: Path | str) -> Config:
         raise ConfigError("'symbols' contains duplicates")
 
     provider = values["data_provider"]
+    if not isinstance(provider, str):
+        raise ConfigError("'data_provider' must be a string")
     if provider in RESERVED_PROVIDERS:
         raise ConfigError(f"'data_provider' {provider!r} is reserved but not implemented yet")
     if provider not in IMPLEMENTED_PROVIDERS:
@@ -140,7 +146,7 @@ def build_config(raw: dict[str, Any], config_path: Path | str) -> Config:
         )
 
     calendar = values["market_calendar"]
-    if calendar not in SUPPORTED_CALENDARS:
+    if not isinstance(calendar, str) or calendar not in SUPPORTED_CALENDARS:
         raise ConfigError(f"'market_calendar' must be one of {sorted(SUPPORTED_CALENDARS)}")
 
     tz = values["display_timezone"]
@@ -159,6 +165,10 @@ def build_config(raw: dict[str, Any], config_path: Path | str) -> Config:
     if not isinstance(level, str) or level.upper() not in LOG_LEVELS:
         raise ConfigError(f"'log_level' must be one of {sorted(LOG_LEVELS)}")
 
+    host = values["web_host"]
+    if not isinstance(host, str) or not host.strip() or any(c.isspace() for c in host):
+        raise ConfigError("'web_host' must be a non-empty host address without whitespace")
+
     history_years = int_value("history_years", 4, 30)
     warmup_bars = int_value("warmup_bars", 50, 1000)
 
@@ -176,4 +186,6 @@ def build_config(raw: dict[str, Any], config_path: Path | str) -> Config:
         run_export_dir=path_value("run_export_dir"),
         request_timeout_seconds=float(timeout),
         log_level=level.upper(),
+        web_host=host,
+        web_port=int_value("web_port", 1, 65535),
     )

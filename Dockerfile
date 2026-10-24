@@ -21,4 +21,4 @@ RUN useradd --system --uid 10001 --no-create-home app
 USER 10001
 
 EXPOSE 8501
-CMD ["python", "-m", "streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["python", "runtime.py"]

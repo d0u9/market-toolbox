@@ -54,3 +54,36 @@ def test_second_writer_is_refused(config_file, tmp_path):
 
     with WriterLock(tmp_path / "data" / ".worker.lock"):
         assert worker.main(["--once"]) == 3
+
+
+@pytest.mark.parametrize("already_stopped", [False, True])
+def test_stop_prevents_more_symbol_requests(config_file, monkeypatch, tmp_path, already_stopped):
+    import threading
+    from config import load_config
+    from locking import WriterLock
+
+    stop = threading.Event()
+
+    class StoppingProvider(FakeProvider):
+        def fetch_daily(self, *args):
+            result = super().fetch_daily(*args)
+            stop.set()
+            return result
+
+    provider = StoppingProvider()
+    cfg = load_config(config_file)
+    monkeypatch.setattr(worker, "get_provider", lambda *args: provider)
+    monkeypatch.setattr(worker, "utcnow", lambda: et(2025, 10, 15, 17))
+    if already_stopped:
+        stop.set()
+    assert worker.run(cfg, stop) == 0
+    assert [call[0] for call in provider.calls] == ([] if already_stopped else ["TEST1"])
+    conn = storage.connect_ro(cfg.sqlite_path)
+    try:
+        if not already_stopped:
+            assert storage.read_symbol(conn, "TEST1")[0]["status"] == "updated"
+        assert storage.read_symbol(conn, "FAKEA")[1] is None
+    finally:
+        conn.close()
+    with WriterLock(cfg.lock_path):
+        pass
