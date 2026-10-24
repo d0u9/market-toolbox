@@ -62,6 +62,13 @@ The machine an agent runs on is only one of many places this code will run (othe
 - This applies even when the conversation with the user is in another language. Translate requirements into English before writing them into the repo.
 - Documents brought in from elsewhere (such as the design document) must be translated to English before they are committed.
 
+## UI components
+
+- Build the page UI (sidebar, header, cards, metrics, badges, tabs, switches, alerts) with `streamlit-shadcn-ui` components only. Do not replace them with hand-written HTML, CSS, `st.html`, or `st.markdown(unsafe_allow_html=True)` markup.
+- Page-wide colors and fonts come from the Streamlit theme in `.streamlit/config.toml`, not from injected CSS.
+- Exception: the price chart (candles, close line, EMA, MACD histogram) does not use `streamlit-shadcn-ui`, because its charts cannot draw Elder-colored candles or the required interactions. It is drawn with TradingView Lightweight Charts in `charts.py` and embedded with `st.iframe`; styling inside that chart page is part of the chart code.
+- If a design need cannot be met with the library, say so and ask before adding custom markup or another UI library.
+
 ## General
 
 - Design reference: the QQQ / VOO Elder Impulse dashboard design document (v1.2). Keep code consistent with it; if code needs to diverge, say so instead of silently changing behavior.
