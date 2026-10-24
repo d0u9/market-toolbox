@@ -12,17 +12,20 @@ import datetime as dt
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 import streamlit_shadcn_ui as ui
 
 import storage
-from charts import RANGES, STATE_DETAIL, STATE_SHORT, build_figure, select_range
+from charts import RANGES, STATE_DETAIL, STATE_SHORT, chart_html, chart_payload, select_range
 from config import ConfigError, load_config
 from page_helpers import symbol_picker
 from services import status
 from services.status import QUALITY_TEXT, STATUS_TEXT
 
 REFRESH_SECONDS = 60
+CHART_HEIGHT = 560
+CHART_HEIGHT_NO_MACD = 440
 # Waiting for the source after the close is normal; only a failure is red.
 BADGE_VARIANT = {status.UPDATED: "default", status.FAILED: "destructive"}
 WORKER_STALE_AFTER = dt.timedelta(minutes=5)
@@ -84,10 +87,10 @@ def load_values(snapshot_id: int, content_hash: str) -> pd.DataFrame:
 
 
 @st.cache_data(max_entries=32, show_spinner=False)
-def cached_figure(snapshot_id: int, content_hash: str, symbol: str, range_key: str,
-                  chart_type: str, show_ema26: bool, show_macd: bool):
-    view = select_range(load_values(snapshot_id, content_hash), range_key)
-    return build_figure(view, symbol, chart_type, show_ema26, show_macd)
+def cached_chart(snapshot_id: int, content_hash: str, range_key: str,
+                 chart_type: str, show_ema26: bool, show_macd: bool) -> str:
+    values = load_values(snapshot_id, content_hash)
+    return chart_html(chart_payload(values, range_key, chart_type, show_ema26, show_macd))
 
 
 def quality_line(state: dict, gap_in_display: bool) -> str:
@@ -154,10 +157,9 @@ def render_symbol(conn, symbol: str) -> tuple[str | None, SnapshotKey | None, bo
             if view["quality_flag"].astype(bool).any():
                 ui.alert("Data has a gap", "Indicators may be affected.", variant="destructive",
                          key="gap")
-            fig = cached_figure(*key, symbol, range_key or "1Y",
-                                "line" if chart == "Line" else "candles",
+            page = cached_chart(*key, range_key or "1Y", "line" if chart == "Line" else "candles",
                                 bool(show_ema26), bool(show_macd))
-            st.plotly_chart(fig, width="stretch", key=f"chart-{symbol}")
+            components.html(page, height=CHART_HEIGHT if show_macd else CHART_HEIGHT_NO_MACD)
     return latest.isoformat(), key, gap_in_display
 
 
@@ -258,3 +260,5 @@ finally:
     conn.close()
 
 page_status()
+st.caption("Charts: [TradingView Lightweight Charts™](https://www.tradingview.com/) · "
+           "Copyright (c) 2026 TradingView, Inc. · Apache License 2.0")

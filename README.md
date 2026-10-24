@@ -4,7 +4,10 @@ A self-hosted dashboard that shows the daily Elder Impulse state of any list
 of US-listed tickers (the demo config tracks QQQ and VOO). Pick a symbol in the
 sidebar; the page shows that one symbol, and the URL (`?symbol=QQQ`) links
 straight to it. The UI uses [streamlit-shadcn-ui](https://github.com/ObservedObserver/streamlit-shadcn-ui)
-(MIT) components. Add a symbol by adding it to
+(MIT) components. The candlestick chart uses
+[TradingView Lightweight Charts™](https://www.tradingview.com/lightweight-charts/)
+5.2.1 (Apache-2.0), vendored in `vendor/lightweight-charts/` so the page needs
+no CDN; its attribution is shown on the chart and in the page footer. Add a symbol by adding it to
 `symbols` in the config; nothing else changes.
 After each US trading session a background worker fetches daily bars, validates
 them, computes EMA13 / MACD(12,26,9) and publishes a snapshot to SQLite. A
@@ -209,6 +212,10 @@ unavailable: missing values or warmup
   reachable from the environment this was developed in.
 
 ## Differences from the design document (v1.2)
+
+- Charts use TradingView Lightweight Charts instead of Plotly. The design
+  lists Lightweight Charts as a later upgrade; it was brought forward for a
+  more professional candlestick view (bar width, crosshair, scrolling).
 
 - Configuration uses the single JSON file described above instead of a `.env` file.
 - The default display time zone is `UTC`; set your own in a local config.

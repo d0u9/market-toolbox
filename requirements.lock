@@ -26,12 +26,10 @@ pandas_market_calendars==5.5.0
 peewee==4.5.3
 pillow==13.0.0
 platformdirs==4.13.5
-plotly==7.1.0
 protobuf==7.36.2
 pyarrow==26.0.0
 pycparser==3.12
 pydeck==0.9.3
-Pygments==2.21.0
 pyluach==2.3.0
 python-dateutil==3.0.0
 python-multipart==0.0.32

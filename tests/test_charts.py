@@ -1,6 +1,7 @@
 import datetime as dt
+import json
 
-from charts import build_figure, line_segments, month_ticks, select_range
+from charts import STATE_COLORS, STATE_SHORT, chart_html, chart_payload, select_range
 from services.calendar import MarketCalendar
 from services.indicators import compute_indicators
 from tests.fakes import synthetic_bars
@@ -13,86 +14,65 @@ def make_values(n_sessions=800, warmup=250):
     return values
 
 
-def test_category_axis_is_explicit_and_ordered():
-    view = select_range(make_values(), "1Y")
-    fig = build_figure(view, "TEST1", "candles", show_ema26=True, show_macd=True)
-    expected = [d.isoformat() for d in view.index]
-    assert fig.layout.hovermode == "x unified"
-    assert fig.layout.hoversubplots == "axis"
-    axis = fig.layout.xaxis
-    assert axis.type == "category" and axis.categoryorder == "array"
-    assert list(axis.categoryarray) == expected
-    assert set(axis.tickvals) <= set(expected)
-    # Every trace, including the MACD histogram, uses the single shared x axis.
-    assert {t.xaxis for t in fig.data} == {"x"}
-    assert any(t.type == "bar" and t.yaxis == "y2" for t in fig.data)
-    # Three state candle traces; together they hold every day exactly once.
-    candles = [t for t in fig.data if t.type == "candlestick"]
-    assert len(candles) == 3
-    xs = sorted(x for t in candles for x in t.x)
-    assert xs == sorted(expected)
-
-
-def test_candle_colors_follow_state_not_direction():
-    view = select_range(make_values(), "3M")
-    fig = build_figure(view, "TEST1", "candles")
-    for t in (t for t in fig.data if t.type == "candlestick"):
-        assert t.increasing.fillcolor == t.decreasing.fillcolor
-        assert t.increasing.line.color == t.decreasing.line.color
-
-
-def test_line_segments_share_boundaries():
-    x = ["d1", "d2", "d3", "d4", "d5"]
-    y = [1.0, 2.0, 3.0, 4.0, 5.0]
-    states = ["green", "green", "red", "red", "green"]
-    gx, gy = line_segments(x, y, states, "green")
-    rx, ry = line_segments(x, y, states, "red")
-    # Green: d1-d2, break, then the d4->d5 segment (starts at red's last point).
-    assert gx == ["d1", "d2", "d2", "d4", "d5", "d5"]
-    assert gy == [1.0, 2.0, None, 4.0, 5.0, None]
-    # Red starts at the previous green point d2.
-    assert rx == ["d2", "d3", "d4", "d4"] and ry == [2.0, 3.0, 4.0, None]
-
-
-def test_line_view_builds_and_has_no_rangebreaks():
-    view = select_range(make_values(), "6M")
-    fig = build_figure(view, "TEST1", "line", show_macd=False)
-    assert not fig.layout.xaxis.rangebreaks
-    assert all(t.type != "bar" for t in fig.data)
-
-
-def test_ranges_exclude_warmup_and_cap_at_three_years():
-    values = make_values(n_sessions=600, warmup=250)
-    view = select_range(values, "3Y")
-    assert len(view) == 350 and (view["elder_state"] != "unavailable").all()
-    assert len(select_range(values, "3M")) < 70
-
-
-def test_month_ticks_thinning():
-    days = [dt.date(2023, 1, 1) + dt.timedelta(days=i) for i in range(0, 3 * 365)]
-    values, labels = month_ticks(days)
-    assert len(values) <= 13 and len(values) == len(labels)
-    assert month_ticks(days[:60])[0][0] == "2023-01-01"
-    assert month_ticks(days[:60])[1][:2] == ["2023", "Feb"]
-    # A range starting mid-month skips that partial month.
-    assert month_ticks(days[20:80])[0][0] == "2023-02-01"
-
-
-def test_histogram_colored_by_state_and_last_value_tags():
-    from charts import STATE_COLORS
-
-    view = select_range(make_values(), "6M")
-    fig = build_figure(view, "TEST1", "candles", show_macd=True)
-    bar = next(t for t in fig.data if t.type == "bar")
-    assert list(bar.marker.color) == [STATE_COLORS[s] for s in view["elder_state"]]
-    tags = [a for a in fig.layout.annotations if a.xref == "paper"]
-    assert [a.text for a in tags] == [f"{view['close'].iloc[-1]:.2f}", f"{view['histogram'].iloc[-1]:.3f}"]
-    assert fig.layout.yaxis.side == "right"
-
-
-def test_gap_marker_drawn_when_flagged():
+def test_candles_carry_state_colors_in_trading_day_order():
     values = make_values()
-    view = select_range(values, "1Y").copy()
-    view.iloc[50:150, view.columns.get_loc("quality_flag")] = 1
-    fig = build_figure(view, "TEST1", "candles")
-    assert any(a.text == "data gap" for a in fig.layout.annotations)
+    payload = chart_payload(values, "1Y")
+    rows = select_range(values, "3Y")
+    times = [p["time"] for p in payload["price"]]
+    assert times == [d.isoformat() for d in rows.index] == sorted(times)
+    for p, state in zip(payload["price"], rows["elder_state"]):
+        assert p["color"] == p["borderColor"] == p["wickColor"] == STATE_COLORS[state]
+    assert all(payload["states"][t] == STATE_SHORT[s] for t, s in zip(times, rows["elder_state"]))
+
+
+def test_visible_range_opens_on_selected_period():
+    values = make_values()
+    for key in ("3M", "6M", "1Y", "3Y"):
+        assert chart_payload(values, key)["visible_from"] == select_range(values, key).index[0].isoformat()
+
+
+def test_warmup_bars_are_never_drawn():
+    values = make_values(n_sessions=600, warmup=250)
+    payload = chart_payload(values, "3Y")
+    assert len(payload["price"]) == 350
+
+
+def test_line_segment_into_a_day_has_that_days_color():
+    # Lightweight Charts colors a segment by its start point, so point i
+    # carries day i+1's color; the last point keeps its own.
+    values = make_values()
+    payload = chart_payload(values, "1Y", chart_type="line")
+    states = list(select_range(values, "3Y")["elder_state"])
+    colors = [p["color"] for p in payload["price"]]
+    assert colors[:-1] == [STATE_COLORS[s] for s in states[1:]]
+    assert colors[-1] == STATE_COLORS[states[-1]]
+    assert set(payload["price"][0]) == {"time", "value", "color"}
+
+
+def test_optional_series():
+    values = make_values()
+    off = chart_payload(values, "1Y", show_ema26=False, show_macd=False)
+    assert off["ema26"] == [] and off["histogram"] == []
+    on = chart_payload(values, "1Y", show_ema26=True, show_macd=True)
+    rows = select_range(values, "3Y")
+    assert len(on["ema26"]) == len(on["histogram"]) == len(rows)
+    assert [h["color"] for h in on["histogram"]] == [STATE_COLORS[s] for s in rows["elder_state"]]
+
+
+def test_gap_markers_at_start_of_flagged_runs():
+    values = make_values()
+    rows = select_range(values, "3Y").index
+    values.loc[rows[50:150], "quality_flag"] = 1
+    assert chart_payload(values, "1Y")["gaps"] == [rows[50].isoformat()]
+
+
+def test_html_is_self_contained_and_escapes_payload():
+    payload = chart_payload(make_values(), "1Y")
+    payload["states"]["x"] = "</script><script>alert(1)</script>"
+    page = chart_html(payload)
+    assert "TradingView Lightweight Charts" in page  # vendored library inlined
+    assert "attributionLogo: true" in page
+    assert "http://" not in page.split("<script>", 1)[0]  # no external stylesheet or script
+    assert "</script><script>alert" not in page
+    data = page.split("const P = ", 1)[1].split(";\nconst LC", 1)[0]
+    assert json.loads(data.replace("<\\/", "</"))["states"]["x"].startswith("</script>")
