@@ -29,6 +29,8 @@ CHART_HEIGHT = 560
 CHART_HEIGHT_NO_MACD = 440
 # Waiting for the source after the close is normal; only a failure is red.
 BADGE_VARIANT = {status.UPDATED: "default", status.FAILED: "destructive"}
+# shadcn badges have no green/blue, so the label carries the state as well.
+ELDER_BADGE = {"Green": "default", "Red": "destructive", "Blue": "secondary"}
 WORKER_STALE_AFTER = dt.timedelta(minutes=5)
 
 try:
@@ -129,18 +131,18 @@ def render_symbol(conn, symbol: str) -> tuple[str | None, SnapshotKey | None, bo
                + (f" ({detail})" if detail else ""))
 
     cols = st.columns(4)
-    # The shadcn metric card has no up/down coloring, so the sign carries direction.
     stats = [
-        ("Close", f"{last['close']:,.2f}",
-         f"{(last['close'] / prev['close'] - 1) * 100:+.2f}% from previous day"),
-        ("EMA13", f"{last['ema13']:.2f}", f"{last['ema13'] - prev['ema13']:+.2f} from previous day"),
-        ("MACD histogram", f"{last['histogram']:.3f}",
-         f"{last['histogram'] - prev['histogram']:+.3f} from previous day"),
-        ("Elder state", label, detail or None),
+        ("Close", f"{last['close']:,.2f}", f"{(last['close'] / prev['close'] - 1) * 100:+.2f}%",
+         "from previous day"),
+        ("EMA13", f"{last['ema13']:.2f}", f"{last['ema13'] - prev['ema13']:+.2f}", "from previous day"),
+        ("MACD histogram", f"{last['histogram']:.3f}", f"{last['histogram'] - prev['histogram']:+.3f}",
+         "from previous day"),
+        ("Elder state", label, None, detail or None),
     ]
-    for col, (name, value, description) in zip(cols, stats):
+    for col, (name, value, delta, description) in zip(cols, stats):
         with col:
-            ui.metric_card(name, value, description=description, key=f"stat-{symbol}-{name}")
+            ui.metric_card(name, value, delta=delta, description=description, variant="dashboard",
+                           key=f"stat-{symbol}-{name}")
 
     gap_in_display = bool(select_range(values, "3Y")["quality_flag"].astype(bool).any())
     with st.container(border=True):
@@ -224,6 +226,66 @@ def page_status() -> None:
     st.caption(f"Page checked {now.astimezone(CFG.display_tz).strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
 
+def latest_quotes(symbols) -> dict[str, tuple[str, float, float | None] | None]:
+    """Latest (Elder label, close, day change %) per symbol; None when there is no data."""
+    quotes: dict[str, tuple[str, float, float | None] | None] = dict.fromkeys(symbols)
+    if not database_ready():
+        return quotes
+    conn = open_connection()
+    try:
+        for sym in symbols:
+            _, snapshot = storage.read_symbol(conn, sym)
+            if snapshot is None:
+                continue
+            values = load_values(*snapshot_key(snapshot))
+            if values.empty:
+                continue
+            last = values.iloc[-1]
+            pct = (last["close"] / values.iloc[-2]["close"] - 1) * 100 if len(values) > 1 else None
+            quotes[sym] = (STATE_SHORT[last["elder_state"]], float(last["close"]), pct)
+    except Exception:
+        pass  # the main panel reports read errors
+    finally:
+        conn.close()
+    return quotes
+
+
+def watchlist_sidebar(symbols, current: str) -> str:
+    """Brand card plus one shadcn card per symbol; returns the selected symbol."""
+    quotes = latest_quotes(symbols)
+    views = {}
+    with ui.elements(key="sidebar") as side:
+        with side.stack(gap="md"):
+            with side.card(size="sm"):
+                with side.card_header():
+                    side.heading(TITLE, level=3)
+                    side.text(f"Daily trend dashboard · refreshes every {REFRESH_SECONDS} s",
+                              variant="muted")
+            side.text("Watchlist", variant="label")
+            for sym in symbols:
+                quote = quotes[sym]
+                with side.card(size="sm", key=f"watch-{sym}"):
+                    with side.card_content():
+                        with side.stack(gap="sm"):
+                            with side.stack(direction="horizontal", justify="between", align="center"):
+                                side.heading(sym, level=4)
+                                if quote:
+                                    side.badge(quote[0], variant=ELDER_BADGE.get(quote[0], "outline"))
+                            if quote is None:
+                                side.text("No data yet", variant="muted")
+                            else:
+                                change = "" if quote[2] is None else f" · {quote[2]:+.2f}%"
+                                side.text(f"{quote[1]:,.2f}{change}", variant="muted")
+                            views[sym] = side.button(
+                                "Viewing" if sym == current else "View", key=f"view-{sym}",
+                                variant="default" if sym == current else "outline", size="sm",
+                                stretch=True)
+    for sym, handle in views.items():
+        if handle.clicked:
+            return sym
+    return current
+
+
 @st.fragment(run_every=REFRESH_SECONDS)
 def wait_for_database() -> None:
     if database_ready():
@@ -231,9 +293,13 @@ def wait_for_database() -> None:
     st.info("Initializing: waiting for the worker to create the database.")
 
 
-st.title(TITLE, anchor=False)
-st.caption(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern market dates. "
-           "Colors show the Elder Impulse state, not up/down days.")
+with ui.elements(key="page-header") as header:
+    with header.card():
+        with header.card_header():
+            header.heading(TITLE, level=2)
+            header.text(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern "
+                        "market dates. Colors show the Elder Impulse state, not up/down days.",
+                        variant="muted")
 
 with st.sidebar:
     # One symbol per page: a plain list for a few symbols, a searchable
@@ -243,7 +309,10 @@ with st.sidebar:
     wanted = st.query_params.get("symbol")
     initial = wanted if wanted in CFG.symbols else CFG.symbols[0]
     if symbol_picker(len(CFG.symbols)) == "list":
-        selected = ui.radio_group("Symbol", list(CFG.symbols), value=initial, key="symbol")
+        selected = watchlist_sidebar(CFG.symbols, initial)
+        if selected != initial:  # redraw so the sidebar highlights the new symbol
+            st.query_params["symbol"] = selected
+            st.rerun()
     else:
         selected = ui.combobox("Symbol", list(CFG.symbols), value=initial,
                                clearable=False, key="symbol")
