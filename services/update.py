@@ -15,9 +15,8 @@ import pandas as pd
 import storage
 from config import Config
 from providers.base import DailyBarProvider, DataNotFound, ProviderError, RateLimited
-from services import indicators, validation
+from services import indicators, retry, status, validation
 from services.calendar import (
-    MARKET_TZ,
     CalendarExceptions,
     CalendarExceptionsError,
     MarketCalendar,
@@ -27,32 +26,13 @@ from services.calendar import (
 
 log = logging.getLogger(__name__)
 
-STATUS_UPDATED = "updated"
-STATUS_WAITING = "waiting"
-STATUS_FAILED = "failed"
-STATUS_INITIALIZING = "initializing"
-
 DISPLAY_YEARS = 3
-RETRY_DELAYS_MINUTES = [5, 15, 30, 60, 60, 60, 60]
-MAX_ATTEMPTS = 8
-RECOVERY_HOUR_ET = 8
-JITTER_RATIO = 0.1
 
 
 @dataclass
 class AttemptOutcome:
     status: str  # run status: published, unchanged, waiting, failed
     detail: str = ""
-
-
-def next_recovery_time(now: dt.datetime) -> dt.datetime:
-    local = now.astimezone(MARKET_TZ)
-    candidate = local.replace(hour=RECOVERY_HOUR_ET, minute=0, second=0, microsecond=0)
-    if candidate <= local:
-        candidate = dt.datetime.combine(
-            local.date() + dt.timedelta(days=1), dt.time(RECOVERY_HOUR_ET), MARKET_TZ
-        )
-    return candidate.astimezone(dt.timezone.utc)
 
 
 def content_hash(bars: pd.DataFrame, source: str, adjustment: str,
@@ -163,35 +143,27 @@ class Updater:
         if state["target_session"] != target.isoformat():
             # A newer target takes priority and restarts the retry cycle.
             if snapshot is None:
-                status = STATUS_INITIALIZING
+                shown = status.INITIALIZING
             elif snapshot["latest_session"] == target.isoformat():
-                status = STATUS_UPDATED
+                shown = status.UPDATED
             else:
-                status = STATUS_WAITING
+                shown = status.WAITING
             with storage.transaction(self.conn):
                 storage.update_state(self.conn, symbol, target_session=target.isoformat(),
-                                     attempts=0, next_attempt_at=None, status=status,
+                                     attempts=0, next_attempt_at=None, status=shown,
                                      status_detail=None)
             state = storage.get_state(self.conn, symbol)
 
         if snapshot and snapshot["latest_session"] == target.isoformat() and not state["force_refresh"]:
-            if state["status"] != STATUS_UPDATED:
+            if state["status"] != status.UPDATED:
                 with storage.transaction(self.conn):
-                    storage.update_state(self.conn, symbol, status=STATUS_UPDATED)
+                    storage.update_state(self.conn, symbol, status=status.UPDATED)
             return None
 
         next_at = storage.parse_ts(state["next_attempt_at"])
         if next_at is not None and now < next_at:
             return None
         return self.attempt(symbol, target, now, state["attempts"] + 1)
-
-    def _retry_at(self, attempts: int, now: dt.datetime) -> tuple[dt.datetime, bool]:
-        """Return (next attempt time, exhausted)."""
-        if attempts >= MAX_ATTEMPTS:
-            return next_recovery_time(now), True
-        base = RETRY_DELAYS_MINUTES[min(attempts, len(RETRY_DELAYS_MINUTES)) - 1]
-        jitter = 1 + self.rng.uniform(-JITTER_RATIO, JITTER_RATIO)
-        return now + dt.timedelta(minutes=base * jitter), False
 
     def _previous_run_kind(self, symbol: str, run_id: int) -> str | None:
         row = self.conn.execute(
@@ -208,23 +180,23 @@ class Updater:
             return self._attempt(symbol, target, now, attempts, run_id)
         except Exception as exc:
             kind, failed, waiting_detail = self._classify(exc, symbol, run_id)
-            retry_at, exhausted = self._retry_at(attempts, now)
-            if kind == RateLimited.kind and self._previous_run_kind(symbol, run_id) == RateLimited.kind:
-                retry_at, exhausted = next_recovery_time(now), True
-            status = STATUS_FAILED if (failed or exhausted) else STATUS_WAITING
+            repeated_rate_limit = (kind == RateLimited.kind
+                                   and self._previous_run_kind(symbol, run_id) == RateLimited.kind)
+            retry_at, exhausted = retry.next_attempt(attempts, now, self.rng, repeated_rate_limit)
+            outcome = status.FAILED if (failed or exhausted) else status.WAITING
             detail = f"{waiting_detail}; next attempt {storage.iso(retry_at)}"
             log.warning("%s %s attempt %d: %s", symbol, target, attempts, detail)
             with storage.transaction(self.conn):
-                storage.finish_run(self.conn, run_id, status, now, kind, waiting_detail)
+                storage.finish_run(self.conn, run_id, outcome, now, kind, waiting_detail)
                 state = storage.get_state(self.conn, symbol)
                 snapshot = storage.get_snapshot(self.conn, state["current_snapshot_id"])
                 if snapshot is None:
-                    shown = STATUS_INITIALIZING
+                    shown = status.INITIALIZING
                 elif snapshot["latest_session"] == target.isoformat():
                     # A forced recalculation failed; the published data is still current.
-                    shown = STATUS_UPDATED
+                    shown = status.UPDATED
                 else:
-                    shown = status
+                    shown = outcome
                 storage.update_state(
                     self.conn, symbol,
                     status=shown,
@@ -232,12 +204,12 @@ class Updater:
                     attempts=attempts,
                     next_attempt_at=storage.iso(retry_at),
                 )
-            return AttemptOutcome(status, detail)
+            return AttemptOutcome(outcome, detail)
 
     def _classify(self, exc: Exception, symbol: str, run_id: int) -> tuple[str, bool, str]:
         if isinstance(exc, validation.TargetMissing):
             return "target_missing", False, f"waiting for data: {exc}"
-        if isinstance(exc, ValidationFailed):
+        if isinstance(exc, validation.ValidationFailed):
             return "validation_failed", True, f"validation failed: {exc}"
         if isinstance(exc, DataNotFound):
             return exc.kind, False, f"data not found: {exc}"
@@ -261,7 +233,7 @@ class Updater:
         for w in result.warnings:
             log.warning("%s: %s", symbol, w)
         if not result.ok:
-            raise ValidationFailed("; ".join(result.errors))
+            raise validation.ValidationFailed("; ".join(result.errors))
 
         quality_message = "; ".join(result.warnings) or None
         gaps_json = storage.dumps([g.isoformat() for g in result.gaps])
@@ -271,16 +243,16 @@ class Updater:
         snapshot = storage.get_snapshot(self.conn, state["current_snapshot_id"])
         common = dict(
             last_checked_at=storage.iso(now), quality=result.quality, gaps_json=gaps_json,
-            quality_message=quality_message, status=STATUS_UPDATED, status_detail=None,
+            quality_message=quality_message, status=status.UPDATED, status_detail=None,
             attempts=0, next_attempt_at=None, force_refresh=0,
         )
 
         if snapshot is not None and snapshot["content_hash"] == digest:
             with storage.transaction(self.conn):
                 storage.update_state(self.conn, symbol, **common)
-                storage.finish_run(self.conn, run_id, "unchanged", now, None, quality_message)
+                storage.finish_run(self.conn, run_id, status.RUN_UNCHANGED, now, None, quality_message)
             log.info("%s %s: content unchanged", symbol, target)
-            return AttemptOutcome("unchanged")
+            return AttemptOutcome(status.RUN_UNCHANGED)
 
         values = indicators.compute_indicators(frame, self.cfg.warmup_bars)
         values["quality_flag"] = validation.gap_flags(values.index, result.gaps)
@@ -302,11 +274,7 @@ class Updater:
             run=(run_id, now, quality_message),
         )
         log.info("%s %s: published snapshot %d (%s)", symbol, target, snapshot_id, result.quality)
-        return AttemptOutcome("published")
-
-
-class ValidationFailed(Exception):
-    pass
+        return AttemptOutcome(status.RUN_PUBLISHED)
 
 
 def make_clock() -> Callable[[], dt.datetime]:

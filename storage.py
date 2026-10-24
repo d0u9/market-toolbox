@@ -16,6 +16,8 @@ from typing import Any, Iterator
 
 import pandas as pd
 
+from services import status
+
 SCHEMA_VERSION = 1
 BUSY_TIMEOUT_MS = 10_000
 SNAPSHOT_RUN_RETENTION_DAYS = 90
@@ -26,7 +28,7 @@ VALUE_COLUMNS = [
     "ema13", "ema26", "macd", "signal", "histogram", "elder_state", "quality_flag",
 ]
 
-SCHEMA = """
+SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -67,7 +69,7 @@ CREATE TABLE IF NOT EXISTS symbol_state (
     gaps_json TEXT NOT NULL DEFAULT '[]',
     quality_message TEXT,
     target_session TEXT,
-    status TEXT NOT NULL DEFAULT 'initializing',
+    status TEXT NOT NULL DEFAULT '{status.INITIALIZING}',
     status_detail TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
@@ -102,11 +104,16 @@ def parse_ts(value: str | None) -> dt.datetime | None:
     return None if value is None else dt.datetime.fromisoformat(value)
 
 
+def _connect(target: Path | str, **kwargs: Any) -> sqlite3.Connection:
+    # Explicit BEGIN/COMMIT (see transaction); ``timeout`` is SQLite's busy timeout.
+    conn = sqlite3.connect(target, isolation_level=None, timeout=BUSY_TIMEOUT_MS / 1000, **kwargs)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def connect_rw(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, isolation_level=None, timeout=BUSY_TIMEOUT_MS / 1000)
-    conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    conn = _connect(path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     with transaction(conn):
@@ -123,12 +130,7 @@ def connect_ro(path: Path) -> sqlite3.Connection:
     """Open read-only. Raises ``FileNotFoundError`` until the worker creates it."""
     if not path.exists():
         raise FileNotFoundError(path)
-    uri = path.resolve().as_uri() + "?mode=ro"
-    conn = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=BUSY_TIMEOUT_MS / 1000,
-                           check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-    return conn
+    return _connect(path.resolve().as_uri() + "?mode=ro", uri=True, check_same_thread=False)
 
 
 @contextlib.contextmanager
@@ -238,7 +240,7 @@ def publish_snapshot(
         )
         if run is not None:
             run_id, now, note = run
-            finish_run(conn, run_id, "published", now, None, note)
+            finish_run(conn, run_id, status.RUN_PUBLISHED, now, None, note)
     return snapshot_id
 
 
@@ -256,8 +258,8 @@ def start_run(conn: sqlite3.Connection, symbol: str, target: dt.date, attempt: i
     with transaction(conn):
         cur = conn.execute(
             "INSERT INTO update_runs(symbol, target_session, started_at, status, attempt) "
-            "VALUES (?, ?, ?, 'running', ?)",
-            (symbol, target.isoformat(), iso(now), attempt),
+            "VALUES (?, ?, ?, ?, ?)",
+            (symbol, target.isoformat(), iso(now), status.RUN_RUNNING, attempt),
         )
     return int(cur.lastrowid)
 
@@ -273,7 +275,8 @@ def finish_run(conn: sqlite3.Connection, run_id: int, status: str, now: dt.datet
 def abandon_running_runs(conn: sqlite3.Connection) -> None:
     """Close runs left 'running' by a crashed worker."""
     with transaction(conn):
-        conn.execute("UPDATE update_runs SET status = 'abandoned' WHERE status = 'running'")
+        conn.execute("UPDATE update_runs SET status = ? WHERE status = ?",
+                     (status.RUN_ABANDONED, status.RUN_RUNNING))
 
 
 def prune_runs(conn: sqlite3.Connection, now: dt.datetime) -> None:

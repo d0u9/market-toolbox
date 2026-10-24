@@ -24,7 +24,9 @@ import storage
 from config import ConfigError, load_config
 from locking import LockHeld, WriterLock
 from providers.base import get_provider
-from services.update import MARKET_TZ, STATUS_UPDATED, Updater
+from services import status
+from services.calendar import MARKET_TZ
+from services.update import Updater
 
 CHECK_INTERVAL_SECONDS = 60
 log = logging.getLogger("worker")
@@ -89,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.once or stop.wait(CHECK_INTERVAL_SECONDS):
                 break
         not_updated = [s for s in cfg.symbols
-                       if storage.get_state(conn, s)["status"] != STATUS_UPDATED]
+                       if storage.get_state(conn, s)["status"] != status.UPDATED]
         conn.close()
     finally:
         lock.release()

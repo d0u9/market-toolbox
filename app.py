@@ -16,19 +16,9 @@ import streamlit as st
 import storage
 from charts import RANGES, STATE_COLORS, STATE_LABELS, build_figure, select_range
 from config import ConfigError, load_config
-from services.validation import QUALITY_COMPLETE, QUALITY_GAP, QUALITY_INSUFFICIENT
+from services import status
+from services.status import QUALITY_TEXT, STATUS_TEXT
 
-STATUS_TEXT = {
-    "updated": "Updated",
-    "waiting": "Waiting for data",
-    "failed": "Update failed",
-    "initializing": "Initializing",
-}
-QUALITY_TEXT = {
-    QUALITY_COMPLETE: "Complete",
-    QUALITY_GAP: "History gap",
-    QUALITY_INSUFFICIENT: "Insufficient history",
-}
 REFRESH_SECONDS = 60
 WORKER_STALE_AFTER = dt.timedelta(minutes=5)
 
@@ -97,7 +87,7 @@ def cached_figure(snapshot_id: int, content_hash: str, symbol: str, range_key: s
 
 def quality_line(state: dict, gap_in_display: bool) -> str:
     quality = state["quality"]
-    if quality == QUALITY_GAP and not gap_in_display:
+    if quality == status.QUALITY_GAP and not gap_in_display:
         # The affected bars have scrolled out of every display range.
         return "Data quality: **Complete** (an older gap is kept in the run records)"
     text = f"Data quality: **{QUALITY_TEXT.get(quality, quality)}**"
@@ -170,9 +160,9 @@ def status_panel(symbol: str, shown_key: SnapshotKey | None, gap_in_display: boo
             st.caption(state["status_detail"])
         return
 
-    status = state["status"]
+    current = state["status"]
     lines = [
-        f"Update status: **{STATUS_TEXT.get(status, status)}**"
+        f"Update status: **{STATUS_TEXT.get(current, current)}**"
         + (f" — {state['status_detail']}" if state.get("status_detail") else ""),
         quality_line(state, gap_in_display),
         f"Target session: {state['target_session'] or '—'} · latest session: {snapshot['latest_session']}",
@@ -181,8 +171,8 @@ def status_panel(symbol: str, shown_key: SnapshotKey | None, gap_in_display: boo
         f"Source: {snapshot['source']} · adjusted prices ({snapshot['adjustment']}); "
         "values are not historical traded prices",
     ]
-    if status != "updated":
-        if status == "failed":
+    if current != status.UPDATED:
+        if current == status.FAILED:
             st.error(lines[0])
         else:
             st.warning(lines[0])

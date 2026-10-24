@@ -1,7 +1,5 @@
 import datetime as dt
 
-import pandas as pd
-
 from charts import build_figure, line_segments, month_ticks, select_range
 from services.calendar import MarketCalendar
 from services.indicators import compute_indicators
@@ -78,17 +76,6 @@ def test_month_ticks_thinning():
     assert month_ticks(days[:60])[1][:2] == ["2023", "Feb"]
     # A range starting mid-month skips that partial month.
     assert month_ticks(days[20:80])[0][0] == "2023-02-01"
-
-
-def test_histogram_colored_by_state_and_last_value_tags():
-    view = select_range(make_values(), "6M")
-    fig = build_figure(view, "TEST1", "candles", show_macd=True)
-    bar = next(t for t in fig.data if t.type == "bar")
-    from charts import STATE_COLORS
-    assert list(bar.marker.color) == [STATE_COLORS[s] for s in view["elder_state"]]
-    tags = [a for a in fig.layout.annotations if a.xref == "paper"]
-    assert [a.text for a in tags] == [f"{view['close'].iloc[-1]:.2f}", f"{view['histogram'].iloc[-1]:.2f}"]
-    assert fig.layout.yaxis.side == "right"
 
 
 def test_histogram_colored_by_state_and_last_value_tags():

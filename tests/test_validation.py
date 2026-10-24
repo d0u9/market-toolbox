@@ -4,15 +4,8 @@ import numpy as np
 import pytest
 
 from services.calendar import MarketCalendar
-from services.validation import (
-    GAP_AFFECTED_BARS,
-    QUALITY_COMPLETE,
-    QUALITY_GAP,
-    QUALITY_INSUFFICIENT,
-    TargetMissing,
-    gap_flags,
-    validate_bars,
-)
+from services.status import QUALITY_COMPLETE, QUALITY_GAP, QUALITY_INSUFFICIENT
+from services.validation import GAP_AFFECTED_BARS, TargetMissing, gap_flags, validate_bars
 from tests.fakes import synthetic_bars
 
 CAL = MarketCalendar("NYSE")

@@ -76,15 +76,17 @@ class FakeProvider:
                                                                   "end": str(end_date_exclusive)})
 
 
+# Raw config for tests; paths resolve under the config file's tmp directory.
+TEST_CONFIG = {
+    "symbols": ["TEST1", "FAKEA"],
+    "calendar_exceptions_path": "exceptions.yaml",
+    "sqlite_path": "data/market.sqlite3",
+    "run_export_dir": "data/exports",
+}
+
+
 def make_config(tmp_path, **overrides):
-    raw = {
-        "symbols": ["TEST1", "FAKEA"],
-        "calendar_exceptions_path": "exceptions.yaml",
-        "sqlite_path": "data/market.sqlite3",
-        "run_export_dir": "data/exports",
-    }
-    raw.update(overrides)
-    return build_config(raw, tmp_path / "config.json")
+    return build_config({**TEST_CONFIG, **overrides}, tmp_path / "config.json")
 
 
 def et(year, month, day, hour, minute=0) -> dt.datetime:

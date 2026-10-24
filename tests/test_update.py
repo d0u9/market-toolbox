@@ -5,16 +5,14 @@ import pytest
 
 import storage
 from providers.base import NetworkError, RateLimited
-from services import update as upd
-from services.update import (
-    MAX_ATTEMPTS,
-    STATUS_FAILED,
-    STATUS_INITIALIZING,
-    STATUS_UPDATED,
-    STATUS_WAITING,
-    Updater,
-    next_recovery_time,
-)
+from services import retry
+from services.calendar import MARKET_TZ
+from services.retry import MAX_ATTEMPTS, next_recovery_time
+from services.status import FAILED as STATUS_FAILED
+from services.status import INITIALIZING as STATUS_INITIALIZING
+from services.status import UPDATED as STATUS_UPDATED
+from services.status import WAITING as STATUS_WAITING
+from services.update import Updater
 from tests.fakes import FakeProvider, et, make_config
 
 D = dt.date
@@ -157,12 +155,12 @@ def test_backoff_sequence_then_failed_and_recovery(env):
         nxt = storage.parse_ts(s["next_attempt_at"])
         delays.append((nxt - now).total_seconds() / 60)
         now = nxt
-    for got, base in zip(delays, upd.RETRY_DELAYS_MINUTES):
+    for got, base in zip(delays, retry.DELAYS_MINUTES):
         assert base * 0.9 - 0.02 <= got <= base * 1.1 + 0.02
     s = state(conn)
     assert s["status"] == STATUS_INITIALIZING  # never had a snapshot
     nxt = storage.parse_ts(s["next_attempt_at"])
-    assert nxt.astimezone(upd.MARKET_TZ).hour == 8
+    assert nxt.astimezone(MARKET_TZ).hour == 8
 
 
 def test_failed_status_after_exhaustion_with_existing_snapshot(env):

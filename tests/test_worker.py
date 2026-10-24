@@ -6,18 +6,13 @@ import pytest
 import storage
 import worker
 from config import ENV_VAR
-from tests.fakes import FakeProvider, et
+from tests.fakes import TEST_CONFIG, FakeProvider, et
 
 
 @pytest.fixture
 def config_file(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({
-        "symbols": ["TEST1", "FAKEA"],
-        "calendar_exceptions_path": "exceptions.yaml",
-        "sqlite_path": "data/market.sqlite3",
-        "run_export_dir": "data/exports",
-    }), encoding="utf-8")
+    path.write_text(json.dumps(TEST_CONFIG), encoding="utf-8")
     monkeypatch.setenv(ENV_VAR, str(path))
     return path
 

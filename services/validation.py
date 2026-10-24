@@ -9,11 +9,9 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-log = logging.getLogger(__name__)
+from services.status import QUALITY_COMPLETE, QUALITY_GAP, QUALITY_INSUFFICIENT
 
-QUALITY_COMPLETE = "complete"
-QUALITY_GAP = "history_gap"
-QUALITY_INSUFFICIENT = "insufficient_history"
+log = logging.getLogger(__name__)
 
 # Bars after a single missing session that carry a quality flag (~4x EMA26).
 GAP_AFFECTED_BARS = 100
@@ -22,6 +20,10 @@ JUMP_WARN_RATIO = 0.20
 
 class TargetMissing(Exception):
     """The provider has not delivered the target session yet."""
+
+
+class ValidationFailed(Exception):
+    """The bars are present but must not be published."""
 
 
 @dataclass
