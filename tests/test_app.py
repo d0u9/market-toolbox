@@ -27,6 +27,12 @@ def seeded(tmp_path, monkeypatch):
     conn.close()
 
 
+def shown_symbol(at):
+    heroes = [m.value for m in at.markdown if "class='sym'" in m.value]
+    assert len(heroes) == 1
+    return heroes[0].split("class='sym'>")[1].split("<")[0]
+
+
 def run_app():
     at = AppTest.from_file(APP, default_timeout=60)
     at.run()
@@ -37,7 +43,7 @@ def run_app():
 def test_page_renders_first_symbol(seeded):
     storage.touch_heartbeat(seeded, dt.datetime.now(dt.timezone.utc))
     at = run_app()
-    assert [h.value for h in at.subheader] == ["TEST1"]
+    assert shown_symbol(at) == "TEST1"
     assert not any("worker has not checked in" in w.value for w in at.warning)
     assert sum("Update status: **Updated**" in c.value for c in at.caption) == 1
 
@@ -67,10 +73,10 @@ def test_any_number_of_symbols(tmp_path, monkeypatch):
     conn.close()
     at = run_app()
     assert at.sidebar.radio[0].options == ["TEST1", "FAKEA", "FAKEB"]
-    assert [h.value for h in at.subheader] == ["TEST1"]
+    assert shown_symbol(at) == "TEST1"
     at.sidebar.radio[0].set_value("FAKEB").run()
     assert not at.exception
-    assert [h.value for h in at.subheader] == ["FAKEB"]
+    assert shown_symbol(at) == "FAKEB"
 
 
 def test_many_symbols_use_a_dropdown(tmp_path, monkeypatch):

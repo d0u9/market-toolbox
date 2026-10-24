@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import storage
+import ui_theme
 from charts import RANGES, STATE_COLORS, STATE_LABELS, build_figure, select_range
 from config import ConfigError, load_config
 from services import status
@@ -97,16 +98,12 @@ def quality_line(state: dict, gap_in_display: bool) -> str:
     return text
 
 
-def change(cur: float, prev: float) -> str:
-    return f"{cur - prev:+.3f}"
-
-
 def render_symbol(conn, symbol: str, opts: dict) -> tuple[str | None, SnapshotKey | None, bool]:
     """Header and chart. Returns (latest session, snapshot key, gap in display)."""
     _, snapshot = storage.read_symbol(conn, symbol)
     key = snapshot_key(snapshot)
-    st.subheader(symbol)
     if snapshot is None:
+        st.subheader(symbol)
         st.info("Initializing: no data published yet. The page refreshes automatically.")
         return None, key, False
 
@@ -119,17 +116,17 @@ def render_symbol(conn, symbol: str, opts: dict) -> tuple[str | None, SnapshotKe
     latest = values.index[-1]
 
     elder = last["elder_state"]
-    color = STATE_COLORS.get(elder, "#888888")
-    st.markdown(
-        f"**{latest.isoformat()}** · adjusted close **{last['close']:.2f}** "
-        f"({(last['close'] / prev['close'] - 1) * 100:+.2f}%)  \n"
-        f"<span style='display:inline-block;width:0.8em;height:0.8em;border-radius:2px;"
-        f"background:{color};margin-right:0.4em'></span>Elder state: **{STATE_LABELS[elder]}**",
-        unsafe_allow_html=True,
-    )
-    c1, c2 = st.columns(2)
-    c1.metric("EMA13", f"{last['ema13']:.2f}", change(last["ema13"], prev["ema13"]))
-    c2.metric("MACD histogram", f"{last['histogram']:.3f}", change(last["histogram"], prev["histogram"]))
+    label, _, detail = STATE_LABELS[elder].partition(" (")
+    st.markdown(ui_theme.hero_html(
+        symbol, latest.isoformat(), float(last["close"]),
+        float((last["close"] / prev["close"] - 1) * 100),
+        STATE_COLORS.get(elder, "#868e96"), label, detail.rstrip(")"),
+    ), unsafe_allow_html=True)
+    st.markdown(ui_theme.tiles_html([
+        ("EMA13", float(last["ema13"]), float(last["ema13"] - prev["ema13"]), ".2f"),
+        ("MACD histogram", float(last["histogram"]), float(last["histogram"] - prev["histogram"]), ".3f"),
+        ("EMA26", float(last["ema26"]), float(last["ema26"] - prev["ema26"]), ".2f"),
+    ]), unsafe_allow_html=True)
 
     view = select_range(values, opts["range"])
     gap_in_display = bool(select_range(values, "3Y")["quality_flag"].astype(bool).any())
@@ -139,7 +136,8 @@ def render_symbol(conn, symbol: str, opts: dict) -> tuple[str | None, SnapshotKe
         if view["quality_flag"].astype(bool).any():
             st.warning("Data has a gap; indicators may be affected.")
         fig = cached_figure(*key, symbol, opts["range"], opts["chart"], opts["ema26"], opts["macd"])
-        st.plotly_chart(fig, width="stretch", key=f"chart-{symbol}")
+        with st.container(key="card-chart"):
+            st.plotly_chart(fig, width="stretch", key=f"chart-{symbol}")
     return latest.isoformat(), key, gap_in_display
 
 
@@ -206,7 +204,8 @@ def wait_for_database() -> None:
     st.info("Initializing: waiting for the worker to create the database.")
 
 
-st.title(TITLE)
+st.markdown(ui_theme.PAGE_CSS, unsafe_allow_html=True)
+st.markdown(ui_theme.title_html(TITLE, "daily trend and momentum"), unsafe_allow_html=True)
 st.caption(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern market dates. "
            "Colors show the Elder Impulse state, not up/down days.")
 
@@ -232,7 +231,8 @@ if not database_ready():
 conn = open_connection()
 try:
     _, key, gap_in_display = render_symbol(conn, selected, opts)
-    status_panel(selected, key, gap_in_display)
+    with st.container(key="card-status"):
+        status_panel(selected, key, gap_in_display)
 except Exception as exc:
     st.error(f"Could not read the local data: {exc}")
 finally:
