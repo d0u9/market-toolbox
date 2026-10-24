@@ -130,7 +130,6 @@ def render_symbol(conn, symbol: str) -> tuple[str | None, SnapshotKey | None, bo
     st.caption(f"{latest.isoformat()} · adjusted prices · Elder state: {label}"
                + (f" ({detail})" if detail else ""))
 
-    cols = st.columns(4)
     stats = [
         ("Close", f"{last['close']:,.2f}", f"{(last['close'] / prev['close'] - 1) * 100:+.2f}%",
          "from previous day"),
@@ -139,23 +138,33 @@ def render_symbol(conn, symbol: str) -> tuple[str | None, SnapshotKey | None, bo
          "from previous day"),
         ("Elder state", label, None, detail or None),
     ]
-    for col, (name, value, delta, description) in zip(cols, stats):
-        with col:
-            ui.metric_card(name, value, delta=delta, description=description, variant="dashboard",
-                           key=f"stat-{symbol}-{name}")
+    # Keep each metric wide enough for its label and value. A shared grid
+    # stretches cards to the same height and wraps on narrower screens.
+    with ui.elements(key=f"stats-{symbol}") as metrics:
+        with metrics.grid(columns=4, min_column_width=180):
+            for name, value, delta, description in stats:
+                with metrics.card(size="sm"):
+                    with metrics.card_header():
+                        metrics.text(name, variant="muted")
+                        metrics.heading(value, level=2)
+                    with metrics.card_content():
+                        with metrics.stack(gap="sm"):
+                            if delta is not None:
+                                metrics.badge(delta, variant="outline")
+                            metrics.text(description or "—", variant="muted")
 
     gap_in_display = bool(select_range(values, "3Y")["quality_flag"].astype(bool).any())
     with st.container(border=True):
-        left, right = st.columns([3, 2])
-        with left:
-            range_key = ui.tabs(list(RANGES), value="1Y", key="range", label="Range")
-        with right:
-            chart = ui.tabs(["Candles", "Line"], value="Candles", key="chart", label="Chart type")
-        s1, s2, _ = st.columns([1, 1, 3])
-        with s1:
-            show_ema26 = ui.switch("EMA26", key="ema26")
-        with s2:
-            show_macd = ui.switch("MACD histogram", value=True, key="macd")
+        with st.container(horizontal=True, horizontal_alignment="distribute",
+                          vertical_alignment="center"):
+            range_key = ui.tabs(list(RANGES), value="1Y", key="range", label="Range",
+                                width="content")
+            chart = ui.tabs(["Candles", "Line"], value="Candles", key="chart", label="Chart type",
+                            width="content")
+        # Size each switch to its label and keep related overlays together.
+        with st.container(horizontal=True, vertical_alignment="center", gap="medium"):
+            show_ema26 = ui.switch("EMA26", key="ema26", width="content")
+            show_macd = ui.switch("MACD histogram", value=True, key="macd", width="content")
         view = select_range(values, range_key or "1Y")
         if len(view) < 2:
             ui.alert("Insufficient history", "Indicators are not shown.", key="insufficient")

@@ -31,6 +31,14 @@ Never commit runtime artifacts:
 
 Before every commit, review `git diff --cached` for the items above. If something sensitive was committed, stop and tell the user; do not try to hide it with a follow-up commit, because history stays public.
 
+## Database schema changes require explicit approval
+
+- Any database schema version change requires the user's explicit confirmation before implementation. This includes changing `SCHEMA_VERSION` or changing tables, columns, indexes, constraints, or stored-data formats; do not bypass approval by leaving the version number unchanged.
+- First describe the proposed schema change, why it is needed, and its effect on existing data. Wait for the user's decision before changing the schema or applying it to a database.
+- The user decides whether historical data or older deployments need compatibility. Do not assume there is legacy data to preserve or proactively add migrations, compatibility layers, dual reads/writes, fallback schemas, or automatic upgrades.
+- If compatibility matters to a proposed change, ask the user whether to preserve existing data, migrate it, or start with a fresh database. Implement only the approach the user authorizes; do not reset, delete, migrate, or rewrite existing databases without authorization.
+- Reviewing the schema and proposing improvements does not authorize schema changes.
+
 ## Tests use fake data only
 
 - All test data is synthetic: generated in code or stored as small hand-written fixtures under `tests/fixtures/`.
