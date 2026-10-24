@@ -86,7 +86,7 @@ def test_histogram_colored_by_state_and_last_value_tags():
     bar = next(t for t in fig.data if t.type == "bar")
     assert list(bar.marker.color) == [STATE_COLORS[s] for s in view["elder_state"]]
     tags = [a for a in fig.layout.annotations if a.xref == "paper"]
-    assert [a.text for a in tags] == [f"{view['close'].iloc[-1]:.2f}", f"{view['histogram'].iloc[-1]:.2f}"]
+    assert [a.text for a in tags] == [f"{view['close'].iloc[-1]:.2f}", f"{view['histogram'].iloc[-1]:.3f}"]
     assert fig.layout.yaxis.side == "right"
 
 

@@ -138,7 +138,7 @@ def render_symbol(conn, symbol: str, opts: dict) -> tuple[str | None, SnapshotKe
         if view["quality_flag"].astype(bool).any():
             st.warning("Data has a gap; indicators may be affected.")
         fig = cached_figure(*key, symbol, opts["range"], opts["chart"], opts["ema26"], opts["macd"])
-        st.plotly_chart(fig, use_container_width=True, key=f"chart-{symbol}")
+        st.plotly_chart(fig, width="stretch", key=f"chart-{symbol}")
     return latest.isoformat(), key, gap_in_display
 
 

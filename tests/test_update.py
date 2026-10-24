@@ -13,7 +13,7 @@ from services.status import INITIALIZING as STATUS_INITIALIZING
 from services.status import UPDATED as STATUS_UPDATED
 from services.status import WAITING as STATUS_WAITING
 from services.update import Updater
-from tests.fakes import FakeProvider, et, make_config
+from tests.fakes import FakeProvider, et, make_config, recent_runs
 
 D = dt.date
 WED = D(2025, 10, 15)
@@ -88,7 +88,7 @@ def test_unchanged_content_does_not_add_snapshot(env):
     s = state(conn)
     assert s["last_checked_at"] == storage.iso(later)
     assert s["content_updated_at"] == storage.iso(NOW_WED)
-    runs = [r["status"] for r in storage.recent_runs(conn, "TEST1")]
+    runs = [r["status"] for r in recent_runs(conn, "TEST1")]
     assert runs[0] == "unchanged"
 
 
@@ -203,7 +203,7 @@ def test_network_error_is_recorded(env):
     cfg, conn, provider, updater = env
     provider.errors["TEST1"] = [NetworkError("timed out")]
     updater.process_symbol("TEST1", WED, NOW_WED)
-    run = storage.recent_runs(conn, "TEST1")[0]
+    run = recent_runs(conn, "TEST1")[0]
     assert run["error_kind"] == "network_error" and run["status"] == STATUS_WAITING
 
 
@@ -230,7 +230,7 @@ def test_single_gap_publishes_with_quality_flags(env):
     assert values["quality_flag"].sum() == 100
     assert values.loc[D(2025, 3, 4), "quality_flag"] == 1
     assert values.loc[D(2025, 2, 28), "quality_flag"] == 0
-    assert "missing session" in storage.recent_runs(conn, "TEST1")[0]["error_summary"]
+    assert "missing session" in recent_runs(conn, "TEST1")[0]["error_summary"]
     # Repair: data reappears; full recalculation clears the flags.
     provider.drop.clear()
     updater.tick(NOW_THU)
@@ -259,7 +259,7 @@ def test_crashed_run_is_marked_abandoned(env):
     cfg, conn, provider, updater = env
     storage.start_run(conn, "TEST1", WED, 1, NOW_WED)
     Updater(cfg, conn, provider)
-    assert storage.recent_runs(conn, "TEST1")[0]["status"] == "abandoned"
+    assert recent_runs(conn, "TEST1")[0]["status"] == "abandoned"
 
 
 def test_catch_up_after_downtime_skips_intermediate_days(env):

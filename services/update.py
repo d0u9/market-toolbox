@@ -7,8 +7,6 @@ import hashlib
 import logging
 import random
 import sqlite3
-from dataclasses import dataclass
-from typing import Callable
 
 import pandas as pd
 
@@ -27,12 +25,6 @@ from services.calendar import (
 log = logging.getLogger(__name__)
 
 DISPLAY_YEARS = 3
-
-
-@dataclass
-class AttemptOutcome:
-    status: str  # run status: published, unchanged, waiting, failed
-    detail: str = ""
 
 
 def content_hash(bars: pd.DataFrame, source: str, adjustment: str,
@@ -137,7 +129,7 @@ class Updater:
             except Exception:  # one symbol must never block the other
                 log.exception("unexpected error while updating %s", symbol)
 
-    def process_symbol(self, symbol: str, target: dt.date, now: dt.datetime) -> AttemptOutcome | None:
+    def process_symbol(self, symbol: str, target: dt.date, now: dt.datetime) -> None:
         state = storage.get_state(self.conn, symbol)
         snapshot = storage.get_snapshot(self.conn, state["current_snapshot_id"])
         if state["target_session"] != target.isoformat():
@@ -158,12 +150,12 @@ class Updater:
             if state["status"] != status.UPDATED:
                 with storage.transaction(self.conn):
                     storage.update_state(self.conn, symbol, status=status.UPDATED)
-            return None
+            return
 
         next_at = storage.parse_ts(state["next_attempt_at"])
         if next_at is not None and now < next_at:
-            return None
-        return self.attempt(symbol, target, now, state["attempts"] + 1)
+            return
+        self.attempt(symbol, target, now, state["attempts"] + 1)
 
     def _previous_run_kind(self, symbol: str, run_id: int) -> str | None:
         row = self.conn.execute(
@@ -174,10 +166,10 @@ class Updater:
 
     # -- one attempt --------------------------------------------------------
 
-    def attempt(self, symbol: str, target: dt.date, now: dt.datetime, attempts: int) -> AttemptOutcome:
+    def attempt(self, symbol: str, target: dt.date, now: dt.datetime, attempts: int) -> None:
         run_id = storage.start_run(self.conn, symbol, target, attempts, now)
         try:
-            return self._attempt(symbol, target, now, attempts, run_id)
+            self._attempt(symbol, target, now, attempts, run_id)
         except Exception as exc:
             kind, failed, waiting_detail = self._classify(exc, symbol, run_id)
             repeated_rate_limit = (kind == RateLimited.kind
@@ -204,7 +196,6 @@ class Updater:
                     attempts=attempts,
                     next_attempt_at=storage.iso(retry_at),
                 )
-            return AttemptOutcome(outcome, detail)
 
     def _classify(self, exc: Exception, symbol: str, run_id: int) -> tuple[str, bool, str]:
         if isinstance(exc, validation.TargetMissing):
@@ -219,7 +210,7 @@ class Updater:
         return "internal_error", True, f"internal error: {type(exc).__name__}: {exc}"
 
     def _attempt(self, symbol: str, target: dt.date, now: dt.datetime,
-                 attempts: int, run_id: int) -> AttemptOutcome:
+                 attempts: int, run_id: int) -> None:
         start = years_before(target, self.cfg.history_years)
         end_exclusive = target + dt.timedelta(days=1)
         bars = self.provider.fetch_daily(symbol, start, end_exclusive)
@@ -252,7 +243,7 @@ class Updater:
                 storage.update_state(self.conn, symbol, **common)
                 storage.finish_run(self.conn, run_id, status.RUN_UNCHANGED, now, None, quality_message)
             log.info("%s %s: content unchanged", symbol, target)
-            return AttemptOutcome(status.RUN_UNCHANGED)
+            return
 
         values = indicators.compute_indicators(frame, self.cfg.warmup_bars)
         values["quality_flag"] = validation.gap_flags(values.index, result.gaps)
@@ -274,8 +265,4 @@ class Updater:
             run=(run_id, now, quality_message),
         )
         log.info("%s %s: published snapshot %d (%s)", symbol, target, snapshot_id, result.quality)
-        return AttemptOutcome(status.RUN_PUBLISHED)
 
-
-def make_clock() -> Callable[[], dt.datetime]:
-    return lambda: dt.datetime.now(dt.timezone.utc)

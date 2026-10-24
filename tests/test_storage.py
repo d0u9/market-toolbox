@@ -8,6 +8,7 @@ import pytest
 
 import storage
 from locking import LockHeld, WriterLock
+from tests.fakes import recent_runs
 
 
 def test_read_only_connection_cannot_write(tmp_path):
@@ -63,7 +64,7 @@ def test_prune_and_export_runs(tmp_path):
     old = storage.start_run(rw, "TEST1", dt.date(2025, 6, 1), 1, now - dt.timedelta(days=100))
     new = storage.start_run(rw, "TEST1", dt.date(2025, 10, 14), 1, now)
     storage.prune_runs(rw, now)
-    ids = [r["id"] for r in storage.recent_runs(rw, "TEST1", 10)]
+    ids = [r["id"] for r in recent_runs(rw, "TEST1", 10)]
     assert ids == [new] and old not in ids
     out = tmp_path / "exports"
     for i in range(10):

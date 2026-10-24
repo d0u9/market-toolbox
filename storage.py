@@ -288,13 +288,12 @@ def prune_runs(conn: sqlite3.Connection, now: dt.datetime) -> None:
 def export_runs(conn: sqlite3.Connection, export_dir: Path, day: dt.date) -> Path:
     export_dir.mkdir(parents=True, exist_ok=True)
     target = export_dir / f"update_runs-{day.isoformat()}.csv"
-    rows = conn.execute("SELECT * FROM update_runs ORDER BY id").fetchall()
+    cur = conn.execute("SELECT * FROM update_runs ORDER BY id")
+    rows = cur.fetchall()
     tmp = target.with_suffix(".csv.tmp")
     with tmp.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(rows[0].keys() if rows else
-                        ["id", "symbol", "target_session", "started_at", "finished_at",
-                         "status", "attempt", "error_kind", "error_summary"])
+        writer.writerow(col[0] for col in cur.description)
         writer.writerows(tuple(r) for r in rows)
     tmp.replace(target)
     for old in sorted(export_dir.glob("update_runs-*.csv"))[:-EXPORT_KEEP]:
@@ -321,13 +320,6 @@ def read_values(conn: sqlite3.Connection, snapshot_id: int) -> pd.DataFrame:
     )
     frame["session_date"] = [dt.date.fromisoformat(d) for d in frame["session_date"]]
     return frame.set_index("session_date")
-
-
-def recent_runs(conn: sqlite3.Connection, symbol: str, limit: int = 5) -> list[dict]:
-    rows = conn.execute(
-        "SELECT * FROM update_runs WHERE symbol = ? ORDER BY id DESC LIMIT ?", (symbol, limit)
-    ).fetchall()
-    return [dict(r) for r in rows]
 
 
 def dumps(value: Any) -> str:

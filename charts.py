@@ -147,7 +147,7 @@ def build_figure(
     ))
 
     last_state = states[-1]
-    tags = [(float(view["close"].iloc[-1]), "y")]
+    tags = [(float(view["close"].iloc[-1]), "y", ".2f")]
     if show_macd:
         fig.add_trace(go.Bar(
             x=x, y=view["histogram"], marker=dict(color=[STATE_COLORS[s] for s in states],
@@ -155,13 +155,13 @@ def build_figure(
             name="MACD histogram", hovertemplate="Histogram %{y:.3f}<extra></extra>",
             xaxis="x", yaxis="y2",
         ))
-        tags.append((float(view["histogram"].iloc[-1]), "y2"))
+        tags.append((float(view["histogram"].iloc[-1]), "y2", ".3f"))
 
     # Last-value tags on the right-hand price axis, in the latest state's color.
-    for value, yref in tags:
+    for value, yref, fmt in tags:
         fig.add_annotation(
             x=1, xref="paper", xanchor="left", y=value, yref=yref, showarrow=False,
-            text=f"{value:.2f}", bgcolor=STATE_COLORS[last_state], borderpad=3,
+            text=format(value, fmt), bgcolor=STATE_COLORS[last_state], borderpad=3,
             font=dict(color="#ffffff", family=MONO, size=12),
         )
 

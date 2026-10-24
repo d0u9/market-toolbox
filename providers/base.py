@@ -46,12 +46,6 @@ class DailyBars:
     params: dict = field(default_factory=dict)
 
 
-def empty_frame() -> pd.DataFrame:
-    frame = pd.DataFrame(columns=BAR_COLUMNS, dtype="float64")
-    frame.index = pd.Index([], name="session_date", dtype="object")
-    return frame
-
-
 class DailyBarProvider(Protocol):
     name: str
 

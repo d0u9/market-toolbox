@@ -97,3 +97,10 @@ def et(year, month, day, hour, minute=0) -> dt.datetime:
 
 def isclose(a: float, b: float) -> bool:
     return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def recent_runs(conn, symbol: str, limit: int = 5) -> list[dict]:
+    rows = conn.execute(
+        "SELECT * FROM update_runs WHERE symbol = ? ORDER BY id DESC LIMIT ?", (symbol, limit)
+    ).fetchall()
+    return [dict(r) for r in rows]
