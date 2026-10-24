@@ -7,10 +7,12 @@
 #   MARKET_TOOLBOX_CONFIG_FILE  host path of your real config (default: demo ./config.json)
 #   APP_UID / APP_GID           container user; set to the owner of ./data (default 10001)
 #   WEB_PORT                    host port bound to 127.0.0.1 (default 8501)
+#   MARKET_TOOLBOX_IMAGE        image to run (default: locally built market-toolbox:local),
+#                               e.g. ghcr.io/<owner>/market-toolbox:latest or :dev
 
 x-app: &app
   build: .
-  image: market-toolbox:local
+  image: ${MARKET_TOOLBOX_IMAGE:-market-toolbox:local}
   restart: unless-stopped
   user: "${APP_UID:-10001}:${APP_GID:-10001}"
   environment:

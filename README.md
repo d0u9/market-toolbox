@@ -91,6 +91,7 @@ Host environment variables that `compose.yaml` reads:
 | `MARKET_TOOLBOX_CONFIG_FILE` | `./config.json` | Host path of your real config; mounted read-only |
 | `APP_UID` / `APP_GID` | `10001` | Container user; must be able to write `./data` |
 | `WEB_PORT` | `8501` | Host port bound to `127.0.0.1` |
+| `MARKET_TOOLBOX_IMAGE` | `market-toolbox:local` | Image to run, e.g. a prebuilt one from ghcr.io |
 
 For example, with a personal config next to the compose file:
 
@@ -107,6 +108,31 @@ inside the container.
 `calendar_exceptions.yaml` is mounted as a single file. Some editors save by
 replacing the file, which the container does not see. After editing it, run
 `docker compose restart worker`.
+
+### Prebuilt images
+
+CI (`.github/workflows/ci.yml`) runs the tests, then builds `linux/amd64` and
+`linux/arm64` images and pushes them to `ghcr.io/<owner>/market-toolbox`:
+
+| Tag | Built from |
+|---|---|
+| `latest` | the default branch |
+| `dev` | any other branch; shared, so the most recent push wins |
+| `X.Y.Z`, `X.Y` | a `vX.Y.Z` git tag |
+| `sha-<short>` | every published build |
+
+Pull requests from forks are built and tested but never pushed.
+
+To run a prebuilt image instead of building on the server:
+
+```sh
+export MARKET_TOOLBOX_IMAGE=ghcr.io/<owner>/market-toolbox:dev   # or :latest
+docker compose pull
+docker compose up -d --no-build
+```
+
+The first push creates the package on ghcr.io as private. Make it public once
+under the package's settings so it can be pulled without logging in.
 
 ### Operations
 
