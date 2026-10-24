@@ -19,11 +19,11 @@ from services.indicators import BLUE, GREEN, RED, UNAVAILABLE
 # color-vision deficiencies, so the state is always also given as text
 # (header badge and hover), never by color alone.
 STATE_COLORS = {GREEN: "#1f9d55", RED: "#e03131", BLUE: "#3b7ddd", UNAVAILABLE: "#868e96"}
-STATE_LABELS = {
-    GREEN: "Green (EMA13 up, histogram up)",
-    RED: "Red (EMA13 down, histogram down)",
-    BLUE: "Blue (mixed or flat)",
-    UNAVAILABLE: "Unavailable",
+STATE_DETAIL = {
+    GREEN: "EMA13 up, histogram up",
+    RED: "EMA13 down, histogram down",
+    BLUE: "mixed or flat",
+    UNAVAILABLE: "",
 }
 STATE_SHORT = {GREEN: "Green", RED: "Red", BLUE: "Blue", UNAVAILABLE: "n/a"}
 EMA13_COLOR = "#e08a00"

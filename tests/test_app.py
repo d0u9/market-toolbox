@@ -86,3 +86,10 @@ def test_many_symbols_render(tmp_path, monkeypatch):
     conn.close()
     at = run_app("FAKE20")
     assert shown_symbol(at) == "FAKE20"
+
+
+def test_symbol_picker_switches_to_search_above_twenty():
+    from page_helpers import symbol_picker
+
+    assert symbol_picker(1) == symbol_picker(20) == "list"
+    assert symbol_picker(21) == symbol_picker(100) == "search"

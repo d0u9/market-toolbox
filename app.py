@@ -16,12 +16,15 @@ import streamlit as st
 import streamlit_shadcn_ui as ui
 
 import storage
-from charts import RANGES, STATE_LABELS, build_figure, select_range
+from charts import RANGES, STATE_DETAIL, STATE_SHORT, build_figure, select_range
 from config import ConfigError, load_config
+from page_helpers import symbol_picker
 from services import status
 from services.status import QUALITY_TEXT, STATUS_TEXT
 
 REFRESH_SECONDS = 60
+# Waiting for the source after the close is normal; only a failure is red.
+BADGE_VARIANT = {status.UPDATED: "default", status.FAILED: "destructive"}
 WORKER_STALE_AFTER = dt.timedelta(minutes=5)
 
 try:
@@ -32,7 +35,6 @@ except ConfigError as exc:
     st.stop()
 
 TITLE = "Elder Impulse"
-SYMBOL_LIST_MAX = 20
 st.set_page_config(page_title=TITLE, layout="wide")
 
 # (snapshot id, content hash): ids restart at 1 when the database is recreated,
@@ -114,18 +116,20 @@ def render_symbol(conn, symbol: str) -> tuple[str | None, SnapshotKey | None, bo
     latest = values.index[-1]
 
     elder = last["elder_state"]
-    label, _, detail = STATE_LABELS[elder].partition(" (")
+    label, detail = STATE_SHORT[elder], STATE_DETAIL[elder]
     st.subheader(symbol, anchor=False)
-    st.caption(f"{latest.isoformat()} · adjusted prices · Elder state: {label} ({detail}")
+    st.caption(f"{latest.isoformat()} · adjusted prices · Elder state: {label}"
+               + (f" ({detail})" if detail else ""))
 
     cols = st.columns(4)
+    # The shadcn metric card has no up/down coloring, so the sign carries direction.
     stats = [
         ("Close", f"{last['close']:,.2f}",
          f"{(last['close'] / prev['close'] - 1) * 100:+.2f}% from previous day"),
         ("EMA13", f"{last['ema13']:.2f}", f"{last['ema13'] - prev['ema13']:+.2f} from previous day"),
         ("MACD histogram", f"{last['histogram']:.3f}",
          f"{last['histogram'] - prev['histogram']:+.3f} from previous day"),
-        ("Elder state", label, detail.rstrip(")")),
+        ("Elder state", label, detail or None),
     ]
     for col, (name, value, description) in zip(cols, stats):
         with col:
@@ -178,7 +182,7 @@ def status_panel(symbol: str, shown_key: SnapshotKey | None, gap_in_display: boo
     current = state["status"]
     quality = quality_line(state, gap_in_display)
     ui.badges([(STATUS_TEXT.get(current, current),
-                "default" if current == status.UPDATED else "destructive"),
+                BADGE_VARIANT.get(current, "secondary")),
                (quality, "secondary")], key=f"badges-{symbol}")
     if current != status.UPDATED and state.get("status_detail"):
         ui.alert(STATUS_TEXT.get(current, current), state["status_detail"],
@@ -231,7 +235,7 @@ with st.sidebar:
     # bookmarked or shared.
     wanted = st.query_params.get("symbol")
     initial = wanted if wanted in CFG.symbols else CFG.symbols[0]
-    if len(CFG.symbols) <= SYMBOL_LIST_MAX:
+    if symbol_picker(len(CFG.symbols)) == "list":
         selected = ui.radio_group("Symbol", list(CFG.symbols), value=initial, key="symbol")
     else:
         selected = ui.combobox("Symbol", list(CFG.symbols), value=initial,
