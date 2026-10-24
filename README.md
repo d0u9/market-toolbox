@@ -1,6 +1,10 @@
 # market-toolbox
 
-A self-hosted dashboard that shows the daily Elder Impulse state of QQQ and VOO.
+A self-hosted dashboard that shows the daily Elder Impulse state of any list
+of US-listed tickers (the demo config tracks QQQ and VOO). The page shows an
+overview table with one row per symbol and a grid of charts, two per row; a
+sidebar picker chooses which charts to draw. Add a symbol by adding it to
+`symbols` in the config; nothing else changes.
 After each US trading session a background worker fetches daily bars, validates
 them, computes EMA13 / MACD(12,26,9) and publishes a snapshot to SQLite. A
 Streamlit page reads that local cache only.

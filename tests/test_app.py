@@ -54,3 +54,23 @@ def test_waiting_for_database(tmp_path, monkeypatch):
     monkeypatch.setenv(ENV_VAR, str(path))
     at = run_app()
     assert any("waiting for the worker" in i.value for i in at.info)
+
+
+def test_any_number_of_symbols(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({**TEST_CONFIG, "symbols": ["TEST1", "FAKEA", "FAKEB"]}),
+                    encoding="utf-8")
+    monkeypatch.setenv(ENV_VAR, str(path))
+    cfg = load_config(path)
+    conn = storage.connect_rw(cfg.sqlite_path)
+    Updater(cfg, conn, FakeProvider(), rng=random.Random(0)).tick(et(2025, 10, 15, 17))
+    conn.close()
+    at = run_app()
+    table = at.dataframe[0].value
+    assert list(table["Symbol"]) == ["TEST1", "FAKEA", "FAKEB"]
+    assert table["Date"].tolist() == ["2025-10-15"] * 3
+    assert [h.value for h in at.subheader] == ["TEST1", "FAKEA", "FAKEB"]
+    # Hiding a chart keeps its row in the overview.
+    at.sidebar.multiselect[0].set_value(["FAKEB"]).run()
+    assert [h.value for h in at.subheader] == ["FAKEB"]
+    assert len(at.dataframe[0].value) == 3
