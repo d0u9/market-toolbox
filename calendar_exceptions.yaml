@@ -1,0 +1,13 @@
+# Confirmed market closures and special close times, keyed by US/Eastern
+# market date. Only confirmed exchange closures belong here; never use this
+# file to hide dates a data provider failed to deliver.
+#
+# closures:
+#   - date: "2099-01-02"
+#     reason: "Example: unscheduled exchange closure"
+# early_closes:
+#   - date: "2099-01-03"
+#     close_time: "13:00"   # America/New_York
+#     reason: "Example: special early close"
+closures: []
+early_closes: []

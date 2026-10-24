@@ -1,5 +1,8 @@
 {
-  "symbols": ["QQQ", "VOO"],
+  "symbols": [
+    "QQQ",
+    "VOO"
+  ],
   "data_provider": "yahoo",
   "market_calendar": "NYSE",
   "calendar_exceptions_path": "calendar_exceptions.yaml",
@@ -8,5 +11,7 @@
   "warmup_bars": 250,
   "update_delay_minutes": 30,
   "sqlite_path": "data/market.sqlite3",
+  "run_export_dir": "data/exports",
+  "request_timeout_seconds": 30,
   "log_level": "INFO"
 }

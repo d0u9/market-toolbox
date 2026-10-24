@@ -1,0 +1,39 @@
+# Start: docker compose up -d --build
+#
+# Runtime data lives in ./data on the host (SQLite database, WAL/SHM files,
+# exported run records, writer lock). It survives rebuilds and restarts.
+#
+# Optional host environment variables (no personal values are stored here):
+#   MARKET_TOOLBOX_CONFIG_FILE  host path of your real config (default: demo ./config.json)
+#   APP_UID / APP_GID           container user; set to the owner of ./data (default 10001)
+#   WEB_PORT                    host port bound to 127.0.0.1 (default 8501)
+
+x-app: &app
+  build: .
+  image: market-toolbox:local
+  restart: unless-stopped
+  user: "${APP_UID:-10001}:${APP_GID:-10001}"
+  environment:
+    MARKET_TOOLBOX_CONFIG: /app/config.runtime.json
+    TZ: UTC
+  volumes:
+    - ./data:/app/data:rw
+    - ${MARKET_TOOLBOX_CONFIG_FILE:-./config.json}:/app/config.runtime.json:ro
+    - ./calendar_exceptions.yaml:/app/calendar_exceptions.yaml:ro
+
+services:
+  worker:
+    <<: *app
+    command: ["python", "worker.py"]
+
+  web:
+    <<: *app
+    depends_on:
+      - worker
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8501}:8501"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
