@@ -66,8 +66,21 @@ def test_any_number_of_symbols(tmp_path, monkeypatch):
     Updater(cfg, conn, FakeProvider(), rng=random.Random(0)).tick(et(2025, 10, 15, 17))
     conn.close()
     at = run_app()
-    assert at.sidebar.selectbox[0].options == ["TEST1", "FAKEA", "FAKEB"]
+    assert at.sidebar.radio[0].options == ["TEST1", "FAKEA", "FAKEB"]
     assert [h.value for h in at.subheader] == ["TEST1"]
-    at.sidebar.selectbox[0].set_value("FAKEB").run()
+    at.sidebar.radio[0].set_value("FAKEB").run()
     assert not at.exception
     assert [h.value for h in at.subheader] == ["FAKEB"]
+
+
+def test_many_symbols_use_a_dropdown(tmp_path, monkeypatch):
+    symbols = [f"FAKE{i}" for i in range(21)]
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({**TEST_CONFIG, "symbols": symbols}), encoding="utf-8")
+    monkeypatch.setenv(ENV_VAR, str(path))
+    conn = storage.connect_rw(load_config(path).sqlite_path)
+    storage.ensure_symbols(conn, tuple(symbols))
+    conn.close()
+    at = run_app()
+    assert not at.sidebar.radio or at.sidebar.radio[0].label != "Symbol"
+    assert at.sidebar.selectbox[0].options == symbols

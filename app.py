@@ -30,6 +30,7 @@ except ConfigError as exc:
     st.stop()
 
 TITLE = "Elder Impulse"
+SYMBOL_LIST_MAX = 20
 st.set_page_config(page_title=TITLE, layout="wide")
 
 # (snapshot id, content hash): ids restart at 1 when the database is recreated,
@@ -210,8 +211,12 @@ st.caption(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern
            "Colors show the Elder Impulse state, not up/down days.")
 
 with st.sidebar:
-    # One symbol per page; any number of configured symbols fits in this list.
-    selected = st.selectbox("Symbol", list(CFG.symbols), key="symbol")  # type to search
+    # One symbol per page: a plain list for a few symbols, a searchable
+    # dropdown once the list would get too long for the sidebar.
+    if len(CFG.symbols) <= SYMBOL_LIST_MAX:
+        selected = st.radio("Symbol", list(CFG.symbols), key="symbol")
+    else:
+        selected = st.selectbox("Symbol", list(CFG.symbols), key="symbol")
     opts = {
         "range": st.radio("Range", list(RANGES), index=2, horizontal=True),
         "chart": st.radio("Chart", ["candles", "line"],
