@@ -98,15 +98,18 @@ _PAGE = """<!doctype html>
 <style>
   html, body { margin: 0; height: 100%; background: #fff;
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
-  #chart { position: absolute; inset: 0; }
-  #legend { position: absolute; left: 12px; top: 8px; z-index: 3; font-size: 12px; color: #52525b;
-    line-height: 1.5; pointer-events: none; font-variant-numeric: tabular-nums; }
+  /* The header sits above the chart in normal flow and wraps on narrow widths,
+     so the legend and the color key never overlap each other or the bars. */
+  body { display: flex; flex-direction: column; }
+  #top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline;
+    gap: 2px 16px; padding: 6px 12px 4px; }
+  #chart { position: relative; flex: 1; min-height: 0; }
+  #legend { font-size: 12px; color: #52525b; line-height: 1.5; font-variant-numeric: tabular-nums; }
   #legend b { color: #09090b; font-weight: 600; }
-  #key { position: absolute; right: 70px; top: 8px; z-index: 3; font-size: 11px; color: #71717a;
-    pointer-events: none; }
+  #key { font-size: 11px; color: #71717a; line-height: 1.5; }
   .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin: 0 3px 0 8px; }
 </style></head>
-<body><div id="chart"></div><div id="legend"></div><div id="key"></div>
+<body><div id="top"><div id="legend"></div><div id="key"></div></div><div id="chart"></div>
 <script src="__LIBRARY_URL__"></script>
 <script>
 const P = __PAYLOAD__;
