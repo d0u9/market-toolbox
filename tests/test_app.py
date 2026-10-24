@@ -34,12 +34,12 @@ def run_app():
     return at
 
 
-def test_page_renders_both_symbols(seeded):
+def test_page_renders_first_symbol(seeded):
     storage.touch_heartbeat(seeded, dt.datetime.now(dt.timezone.utc))
     at = run_app()
-    assert [h.value for h in at.subheader] == ["TEST1", "FAKEA"]
+    assert [h.value for h in at.subheader] == ["TEST1"]
     assert not any("worker has not checked in" in w.value for w in at.warning)
-    assert sum("Update status: **Updated**" in c.value for c in at.caption) == 2
+    assert sum("Update status: **Updated**" in c.value for c in at.caption) == 1
 
 
 def test_stale_worker_is_reported(seeded):
@@ -66,11 +66,8 @@ def test_any_number_of_symbols(tmp_path, monkeypatch):
     Updater(cfg, conn, FakeProvider(), rng=random.Random(0)).tick(et(2025, 10, 15, 17))
     conn.close()
     at = run_app()
-    table = at.dataframe[0].value
-    assert list(table["Symbol"]) == ["TEST1", "FAKEA", "FAKEB"]
-    assert table["Date"].tolist() == ["2025-10-15"] * 3
-    assert [h.value for h in at.subheader] == ["TEST1", "FAKEA", "FAKEB"]
-    # Hiding a chart keeps its row in the overview.
-    at.sidebar.multiselect[0].set_value(["FAKEB"]).run()
+    assert at.sidebar.selectbox[0].options == ["TEST1", "FAKEA", "FAKEB"]
+    assert [h.value for h in at.subheader] == ["TEST1"]
+    at.sidebar.selectbox[0].set_value("FAKEB").run()
+    assert not at.exception
     assert [h.value for h in at.subheader] == ["FAKEB"]
-    assert len(at.dataframe[0].value) == 3

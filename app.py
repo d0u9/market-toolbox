@@ -30,7 +30,6 @@ except ConfigError as exc:
     st.stop()
 
 TITLE = "Elder Impulse"
-CHARTS_PER_ROW = 2
 st.set_page_config(page_title=TITLE, layout="wide")
 
 # (snapshot id, content hash): ids restart at 1 when the database is recreated,
@@ -182,38 +181,6 @@ def status_panel(symbol: str, shown_key: SnapshotKey | None, gap_in_display: boo
 
 
 @st.fragment(run_every=REFRESH_SECONDS)
-def overview() -> None:
-    """One row per configured symbol, so any number of symbols stays readable."""
-    rows, dates = [], {}
-    conn = open_connection()
-    try:
-        for symbol in CFG.symbols:
-            state, snapshot = storage.read_symbol(conn, symbol)
-            row = {"Symbol": symbol, "Date": None, "Elder state": None, "Close": None,
-                   "Change %": None, "Update status": STATUS_TEXT.get(state["status"], state["status"])
-                   if state else STATUS_TEXT[status.INITIALIZING], "Data quality": None}
-            if snapshot is not None:
-                values = load_values(*snapshot_key(snapshot))
-                if len(values) > 1:
-                    last, prev = values.iloc[-1], values.iloc[-2]
-                    row.update({
-                        "Date": values.index[-1].isoformat(),
-                        "Elder state": STATE_LABELS[last["elder_state"]].split(" (")[0],
-                        "Close": round(float(last["close"]), 2),
-                        "Change %": round(float((last["close"] / prev["close"] - 1) * 100), 2),
-                        "Data quality": QUALITY_TEXT.get(state["quality"], state["quality"]),
-                    })
-                    dates[symbol] = row["Date"]
-            rows.append(row)
-    finally:
-        conn.close()
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-    if len(set(dates.values())) > 1:
-        st.warning("Data dates differ between symbols: "
-                   + ", ".join(f"{s} {d}" for s, d in dates.items()))
-
-
-@st.fragment(run_every=REFRESH_SECONDS)
 def page_status() -> None:
     try:
         conn = open_connection()
@@ -243,6 +210,8 @@ st.caption(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern
            "Colors show the Elder Impulse state, not up/down days.")
 
 with st.sidebar:
+    # One symbol per page; any number of configured symbols fits in this list.
+    selected = st.selectbox("Symbol", list(CFG.symbols), key="symbol")  # type to search
     opts = {
         "range": st.radio("Range", list(RANGES), index=2, horizontal=True),
         "chart": st.radio("Chart", ["candles", "line"],
@@ -250,24 +219,15 @@ with st.sidebar:
         "ema26": st.checkbox("Show EMA26", value=False),
         "macd": st.checkbox("Show MACD histogram", value=True),
     }
-    shown = st.multiselect("Charts", list(CFG.symbols), default=list(CFG.symbols))
 
 if not database_ready():
     wait_for_database()
     st.stop()
 
-overview()
-
 conn = open_connection()
 try:
-    # A grid of at most CHARTS_PER_ROW charts per row; Streamlit stacks
-    # columns on narrow screens.
-    for i in range(0, len(shown), CHARTS_PER_ROW):
-        row_symbols = shown[i:i + CHARTS_PER_ROW]
-        for col, symbol in zip(st.columns(CHARTS_PER_ROW), row_symbols):
-            with col:
-                _, key, gap_in_display = render_symbol(conn, symbol, opts)
-                status_panel(symbol, key, gap_in_display)
+    _, key, gap_in_display = render_symbol(conn, selected, opts)
+    status_panel(selected, key, gap_in_display)
 except Exception as exc:
     st.error(f"Could not read the local data: {exc}")
 finally:
