@@ -35,6 +35,8 @@ jobs:
             requirements.lock
             requirements-dev.txt
       - run: pip install -r requirements-dev.txt
+      # Chromium for tests/test_chart_browser.py (skipped when missing).
+      - run: python -m playwright install --with-deps chromium
       # A non-UTC zone and C locale catch accidental reliance on host settings.
       - run: python -m pytest -q
         env:

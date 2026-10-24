@@ -4,6 +4,8 @@ base = "light"
 [server]
 headless = true
 fileWatcherType = "none"
+# Serves ./static at /app/static so the browser caches the chart library.
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false

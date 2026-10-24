@@ -5,4 +5,6 @@
 - License: Apache-2.0 (see `LICENSE`); attribution in `NOTICE`.
 - The chart keeps `layout.attributionLogo` on, which links to
   https://www.tradingview.com/ as the license notice requires.
-- Vendored so the page works without any CDN or network access.
+- Vendored so the page works without any CDN or network access. Served by
+  Streamlit static file serving at `/app/static/lightweight-charts/`, so the
+  browser downloads it once and caches it.

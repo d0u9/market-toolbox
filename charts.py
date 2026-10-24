@@ -1,8 +1,9 @@
 """Elder Impulse chart, drawn with TradingView Lightweight Charts™ (vendored).
 
 ``chart_payload`` turns indicator rows into plain JSON-ready data (pure, tested
-without a browser); ``chart_html`` wraps it with the vendored library into a
-self-contained page for ``streamlit.components.v1.html``. Bars are placed by
+without a browser); ``chart_html`` wraps it into a page for ``st.iframe`` that
+loads the vendored library from ``LIBRARY_PATH`` (served from ./static, so the
+browser caches it and each redraw only sends the data). Bars are placed by
 trading-day order, so non-trading days take no space.
 """
 
@@ -31,8 +32,9 @@ EMA26_COLOR = "#7e4fc9"
 GAP_COLOR = "#b8860b"
 
 RANGES = {"3M": 3, "6M": 6, "1Y": 12, "3Y": 36}
-LIBRARY = Path(__file__).resolve().parent / "vendor" / "lightweight-charts" / \
-    "lightweight-charts.standalone.production.js"
+# Location under the Streamlit app's static root (./static).
+LIBRARY_PATH = "lightweight-charts/lightweight-charts.standalone.production.js"
+LIBRARY_FILE = Path(__file__).resolve().parent / "static" / LIBRARY_PATH
 
 
 def select_range(values: pd.DataFrame, range_key: str) -> pd.DataFrame:
@@ -105,7 +107,7 @@ _PAGE = """<!doctype html>
   .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin: 0 3px 0 8px; }
 </style></head>
 <body><div id="chart"></div><div id="legend"></div><div id="key"></div>
-<script>__LIBRARY__</script>
+<script src="__LIBRARY_URL__"></script>
 <script>
 const P = __PAYLOAD__;
 const LC = LightweightCharts;
@@ -187,19 +189,9 @@ showLegend(null);
 """
 
 
-def chart_html(payload: dict) -> str:
-    """A self-contained page; the JSON is escaped so it cannot close the script tag."""
+def chart_html(payload: dict, library_url: str) -> str:
+    """The chart page; the JSON is escaped so it cannot close the script tag."""
     data = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
-    page = (_PAGE.replace("__EMA13__", EMA13_COLOR).replace("__EMA26__", EMA26_COLOR)
-            .replace("__GAP__", GAP_COLOR).replace("__PAYLOAD__", data))
-    return page.replace("__LIBRARY__", _library())  # last: the library text is not scanned
-
-
-_library_cache: str | None = None
-
-
-def _library() -> str:
-    global _library_cache
-    if _library_cache is None:
-        _library_cache = LIBRARY.read_text(encoding="utf-8")
-    return _library_cache
+    return (_PAGE.replace("__EMA13__", EMA13_COLOR).replace("__EMA26__", EMA26_COLOR)
+            .replace("__GAP__", GAP_COLOR).replace("__LIBRARY_URL__", library_url)
+            .replace("__PAYLOAD__", data))

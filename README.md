@@ -6,7 +6,8 @@ sidebar; the page shows that one symbol, and the URL (`?symbol=QQQ`) links
 straight to it. The UI uses [streamlit-shadcn-ui](https://github.com/ObservedObserver/streamlit-shadcn-ui)
 (MIT) components. The candlestick chart uses
 [TradingView Lightweight Charts™](https://www.tradingview.com/lightweight-charts/)
-5.2.1 (Apache-2.0), vendored in `vendor/lightweight-charts/` so the page needs
+5.2.1 (Apache-2.0), vendored in `static/lightweight-charts/` (served by Streamlit and cached by
+the browser) so the page needs
 no CDN; its attribution is shown on the chart and in the page footer. Add a symbol by adding it to
 `symbols` in the config; nothing else changes.
 After each US trading session a background worker fetches daily bars, validates

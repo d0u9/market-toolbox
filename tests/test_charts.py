@@ -1,7 +1,7 @@
 import datetime as dt
 import json
 
-from charts import STATE_COLORS, STATE_SHORT, chart_html, chart_payload, select_range
+from charts import LIBRARY_FILE, STATE_COLORS, STATE_SHORT, chart_html, chart_payload, select_range
 from services.calendar import MarketCalendar
 from services.indicators import compute_indicators
 from tests.fakes import synthetic_bars
@@ -66,13 +66,17 @@ def test_gap_markers_at_start_of_flagged_runs():
     assert chart_payload(values, "1Y")["gaps"] == [rows[50].isoformat()]
 
 
-def test_html_is_self_contained_and_escapes_payload():
+def test_html_loads_library_and_escapes_payload():
     payload = chart_payload(make_values(), "1Y")
     payload["states"]["x"] = "</script><script>alert(1)</script>"
-    page = chart_html(payload)
-    assert "TradingView Lightweight Charts" in page  # vendored library inlined
+    page = chart_html(payload, "/app/static/lib.js")
+    assert '<script src="/app/static/lib.js"></script>' in page
     assert "attributionLogo: true" in page
-    assert "http://" not in page.split("<script>", 1)[0]  # no external stylesheet or script
     assert "</script><script>alert" not in page
     data = page.split("const P = ", 1)[1].split(";\nconst LC", 1)[0]
     assert json.loads(data.replace("<\\/", "</"))["states"]["x"].startswith("</script>")
+
+
+def test_vendored_library_is_present():
+    assert LIBRARY_FILE.read_text(encoding="utf-8").lstrip().startswith("/*!")
+    assert "Lightweight Charts" in LIBRARY_FILE.read_text(encoding="utf-8")[:300]

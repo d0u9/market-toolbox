@@ -12,12 +12,13 @@ import datetime as dt
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 import streamlit_shadcn_ui as ui
 
 import storage
-from charts import RANGES, STATE_DETAIL, STATE_SHORT, chart_html, chart_payload, select_range
+from charts import (
+    LIBRARY_PATH, RANGES, STATE_DETAIL, STATE_SHORT, chart_html, chart_payload, select_range,
+)
 from config import ConfigError, load_config
 from page_helpers import symbol_picker
 from services import status
@@ -38,6 +39,9 @@ except ConfigError as exc:
     st.stop()
 
 TITLE = "Elder Impulse"
+# Absolute path, honoring server.baseUrlPath: the chart iframe has no URL of its own.
+_BASE = st.get_option("server.baseUrlPath").strip("/")
+LIBRARY_URL = f"{'/' + _BASE if _BASE else ''}/app/static/{LIBRARY_PATH}"
 st.set_page_config(page_title=TITLE, layout="wide")
 
 # (snapshot id, content hash): ids restart at 1 when the database is recreated,
@@ -90,7 +94,7 @@ def load_values(snapshot_id: int, content_hash: str) -> pd.DataFrame:
 def cached_chart(snapshot_id: int, content_hash: str, range_key: str,
                  chart_type: str, show_ema26: bool, show_macd: bool) -> str:
     values = load_values(snapshot_id, content_hash)
-    return chart_html(chart_payload(values, range_key, chart_type, show_ema26, show_macd))
+    return chart_html(chart_payload(values, range_key, chart_type, show_ema26, show_macd), LIBRARY_URL)
 
 
 def quality_line(state: dict, gap_in_display: bool) -> str:
@@ -159,7 +163,8 @@ def render_symbol(conn, symbol: str) -> tuple[str | None, SnapshotKey | None, bo
                          key="gap")
             page = cached_chart(*key, range_key or "1Y", "line" if chart == "Line" else "candles",
                                 bool(show_ema26), bool(show_macd))
-            components.html(page, height=CHART_HEIGHT if show_macd else CHART_HEIGHT_NO_MACD)
+            st.iframe(page, height=CHART_HEIGHT if show_macd else CHART_HEIGHT_NO_MACD,
+                      alt=f"{symbol} Elder Impulse chart")
     return latest.isoformat(), key, gap_in_display
 
 
