@@ -10,6 +10,7 @@ trading-day order, so non-trading days take no space.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -37,6 +38,14 @@ LIBRARY_PATH = "lightweight-charts/lightweight-charts.standalone.production.js"
 LIBRARY_FILE = Path(__file__).resolve().parent / "static" / LIBRARY_PATH
 
 
+def number_precision(values, minimum: int = 2) -> int:
+    """Keep small nonzero quote values visible without assuming cents."""
+    nonzero = [abs(float(value)) for value in values if float(value) != 0 and math.isfinite(float(value))]
+    if not nonzero:
+        return minimum
+    return max(minimum, min(10, 2 - math.floor(math.log10(min(nonzero)))))
+
+
 def select_range(values: pd.DataFrame, range_key: str) -> pd.DataFrame:
     """Rows with a valid Elder state inside the selected range."""
     valid = values[values["elder_state"] != UNAVAILABLE]
@@ -60,17 +69,19 @@ def chart_payload(values: pd.DataFrame, range_key: str, chart_type: str = "candl
     colors = [STATE_COLORS[s] for s in rows["elder_state"]]
     flags = rows["quality_flag"].astype(bool).tolist()
 
-    def series(column: str, digits: int) -> list[dict]:
-        return [{"time": t, "value": round(float(v), digits)} for t, v in zip(times, rows[column])]
+    def series(column: str) -> list[dict]:
+        return [{"time": t, "value": float(v)} for t, v in zip(times, rows[column])]
 
     payload = {
+        "price_precision": number_precision(rows["low"]),
+        "histogram_precision": number_precision(rows["histogram"], 3),
         "chart_type": chart_type,
         "show_ema26": show_ema26,
         "show_macd": show_macd,
         "visible_from": shown.index[0].isoformat() if len(shown) else None,
-        "ema13": series("ema13", 4),
-        "ema26": series("ema26", 4) if show_ema26 else [],
-        "histogram": [dict(p, color=c) for p, c in zip(series("histogram", 5), colors)] if show_macd else [],
+        "ema13": series("ema13"),
+        "ema26": series("ema26") if show_ema26 else [],
+        "histogram": [dict(p, color=c) for p, c in zip(series("histogram"), colors)] if show_macd else [],
         # Start of each run of gap-affected bars, marked on the chart.
         "gaps": [t for i, t in enumerate(times) if flags[i] and (i == 0 or not flags[i - 1])],
         "states": {t: STATE_SHORT[s] for t, s in zip(times, rows["elder_state"])},
@@ -81,11 +92,11 @@ def chart_payload(values: pd.DataFrame, range_key: str, chart_type: str = "candl
         # point. The design colors the move from day t-1 to day t with day t's
         # state, so each point carries the next day's color (the last keeps its own).
         segment_colors = colors[1:] + colors[-1:]
-        payload["price"] = [dict(p, color=c) for p, c in zip(series("close", 4), segment_colors)]
+        payload["price"] = [dict(p, color=c) for p, c in zip(series("close"), segment_colors)]
     else:
         payload["price"] = [
-            {"time": t, "open": round(float(o), 4), "high": round(float(h), 4),
-             "low": round(float(lo), 4), "close": round(float(c), 4),
+            {"time": t, "open": float(o), "high": float(h),
+             "low": float(lo), "close": float(c),
              "color": col, "borderColor": col, "wickColor": col}
             for t, o, h, lo, c, col in zip(times, rows["open"], rows["high"], rows["low"],
                                            rows["close"], colors)
@@ -129,20 +140,22 @@ const chart = LC.createChart(document.getElementById("chart"), {
 const price = P.chart_type === "line"
   ? chart.addSeries(LC.LineSeries, { lineWidth: 2, priceLineVisible: true })
   : chart.addSeries(LC.CandlestickSeries, {});
+const priceFormat = { type: "price", precision: P.price_precision, minMove: 10 ** -P.price_precision };
+price.applyOptions({ priceFormat });
 price.setData(P.price);
 const ema13 = chart.addSeries(LC.LineSeries, { color: "__EMA13__", lineWidth: 2,
-  priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, priceFormat });
 ema13.setData(P.ema13);
 let ema26 = null;
 if (P.show_ema26) {
   ema26 = chart.addSeries(LC.LineSeries, { color: "__EMA26__", lineWidth: 2,
-    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, priceFormat });
   ema26.setData(P.ema26);
 }
 let hist = null;
 if (P.show_macd) {
   hist = chart.addSeries(LC.HistogramSeries, { priceLineVisible: false,
-    priceFormat: { type: "price", precision: 3, minMove: 0.001 } }, 1);
+    priceFormat: { type: "price", precision: P.histogram_precision, minMove: 10 ** -P.histogram_precision } }, 1);
   hist.setData(P.histogram);
   chart.panes()[0].setStretchFactor(3);
   chart.panes()[1].setStretchFactor(1);
@@ -186,11 +199,11 @@ function showLegend(t) {
   const i = byTime[t] ?? P.price.length - 1;
   const p = P.price[i], time = p.time;
   const parts = [["", time]];
-  if (P.chart_type === "line") parts.push(["C", fmt(p.value, 2)]);
-  else parts.push(["O", fmt(p.open, 2)], ["H", fmt(p.high, 2)], ["L", fmt(p.low, 2)], ["C", fmt(p.close, 2)]);
-  parts.push(["EMA13", fmt(P.ema13[i]?.value, 2)]);
-  if (P.show_ema26) parts.push(["EMA26", fmt(P.ema26[i]?.value, 2)]);
-  if (P.show_macd) parts.push(["Hist", fmt(P.histogram[i]?.value, 3)]);
+  if (P.chart_type === "line") parts.push(["C", fmt(p.value, P.price_precision)]);
+  else parts.push(["O", fmt(p.open, P.price_precision)], ["H", fmt(p.high, P.price_precision)], ["L", fmt(p.low, P.price_precision)], ["C", fmt(p.close, P.price_precision)]);
+  parts.push(["EMA13", fmt(P.ema13[i]?.value, P.price_precision)]);
+  if (P.show_ema26) parts.push(["EMA26", fmt(P.ema26[i]?.value, P.price_precision)]);
+  if (P.show_macd) parts.push(["Hist", fmt(P.histogram[i]?.value, P.histogram_precision)]);
   parts.push(["Elder", P.states[time]]);
   legend.replaceChildren();
   parts.forEach(([label, value], n) => {

@@ -11,7 +11,6 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import yaml
 
-MARKET_TZ = ZoneInfo("America/New_York")
 UTC = dt.timezone.utc
 
 
@@ -27,25 +26,25 @@ class CalendarExceptions:
 
 
 def load_exceptions(path: Path) -> CalendarExceptions:
-    """Parse the exceptions YAML. A missing file means no exceptions."""
-    if not path.exists():
-        return CalendarExceptions(version="missing")
+    """Parse a single calendar's exceptions; missing files are errors."""
     return parse_exceptions(path.read_text(encoding="utf-8"), str(path))
 
 
 def parse_exceptions(text: str, path: str = "calendar exceptions") -> CalendarExceptions:
     try:
-        data = yaml.safe_load(text) or {}
+        data = yaml.safe_load(text)
     except (yaml.YAMLError, ValueError) as exc:  # PyYAML raises ValueError for bad dates
         raise CalendarExceptionsError(f"{path}: invalid YAML: {exc}") from None
-    if not isinstance(data, dict):
+    if data is None:
+        data = {}
+    if not isinstance(data, dict) or any(not isinstance(key, str) for key in data):
         raise CalendarExceptionsError(f"{path}: top level must be a mapping")
     unknown = set(data) - {"closures", "early_closes"}
     if unknown:
         raise CalendarExceptionsError(f"{path}: unknown key(s): {sorted(unknown)}")
 
     def entries(key: str) -> list[dict]:
-        items = data.get(key) or []
+        items = data.get(key, [])
         if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
             raise CalendarExceptionsError(f"{path}: '{key}' must be a list of mappings")
         return items
@@ -81,6 +80,8 @@ def parse_exceptions(text: str, path: str = "calendar exceptions") -> CalendarEx
             raise CalendarExceptionsError(
                 f"{path}: early close has invalid close_time {item.get('close_time')!r}"
             ) from None
+        if close_time.tzinfo is not None:
+            raise CalendarExceptionsError(f"{path}: close_time must be a local time without an offset")
         day = parse_date(item, "early_closes")
         if day in early or day in closures:
             raise CalendarExceptionsError(f"{path}: duplicate exception date {day}")
@@ -89,11 +90,14 @@ def parse_exceptions(text: str, path: str = "calendar exceptions") -> CalendarEx
 
 
 class MarketCalendar:
-    def __init__(self, name: str = "NYSE", exceptions: CalendarExceptions | None = None) -> None:
+    def __init__(self, name: str, exceptions: CalendarExceptions | None = None) -> None:
         import pandas_market_calendars as mcal
 
         self._calendar = mcal.get_calendar(name)
+        # Preserve the configured key: NASDAQ's backend reports its name as NYSE.
         self.name = name
+        self.tz = ZoneInfo(str(self._calendar.tz))
+        self.version = mcal.__version__
         self.exceptions = exceptions or CalendarExceptions()
         # The worker asks for the target every minute; the recent schedule only
         # changes when the market date does.
@@ -110,7 +114,7 @@ class MarketCalendar:
             closes.pop(day, None)
         for day, (close_time, _) in self.exceptions.early_closes.items():
             if day in closes:
-                closes[day] = dt.datetime.combine(day, close_time, MARKET_TZ).astimezone(UTC)
+                closes[day] = dt.datetime.combine(day, close_time, self.tz).astimezone(UTC)
         return pd.Series(closes, dtype="object").sort_index()
 
     def sessions(self, start: dt.date, end_exclusive: dt.date) -> list[dt.date]:
@@ -120,7 +124,9 @@ class MarketCalendar:
 
     def target_session(self, now_utc: dt.datetime, delay_minutes: int) -> dt.date:
         """Latest session whose close plus the delay is not after ``now_utc``."""
-        today = now_utc.astimezone(MARKET_TZ).date()
+        if now_utc.tzinfo is None or now_utc.utcoffset() is None:
+            raise ValueError("target_session requires a timezone-aware timestamp")
+        today = now_utc.astimezone(self.tz).date()
         if self._recent is None or self._recent[0] != today:
             self._recent = (today, self.schedule(today - dt.timedelta(days=21), today))
         sched = self._recent[1]

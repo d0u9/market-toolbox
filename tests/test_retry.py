@@ -5,13 +5,16 @@ import pytest
 
 from services import retry
 from tests.fakes import et
+from zoneinfo import ZoneInfo
+
+MARKET_TZ = ZoneInfo("America/New_York")
 
 
 def test_delays_follow_schedule_within_jitter():
     now = et(2025, 10, 15, 17)
     rng = random.Random(3)
     for attempts, base in enumerate(retry.DELAYS_MINUTES, start=1):
-        at, exhausted = retry.next_attempt(attempts, now, rng)
+        at, exhausted = retry.next_attempt(attempts, now, rng, MARKET_TZ)
         minutes = (at - now).total_seconds() / 60
         assert not exhausted
         assert base * (1 - retry.JITTER_RATIO) <= minutes <= base * (1 + retry.JITTER_RATIO)
@@ -20,8 +23,8 @@ def test_delays_follow_schedule_within_jitter():
 def test_exhausted_or_stopped_waits_for_recovery():
     now = et(2025, 10, 15, 17)
     rng = random.Random(3)
-    assert retry.next_attempt(retry.MAX_ATTEMPTS, now, rng) == (et(2025, 10, 16, 8), True)
-    assert retry.next_attempt(1, now, rng, stop_until_recovery=True) == (et(2025, 10, 16, 8), True)
+    assert retry.next_attempt(retry.MAX_ATTEMPTS, now, rng, MARKET_TZ) == (et(2025, 10, 16, 8), True)
+    assert retry.next_attempt(1, now, rng, MARKET_TZ, stop_until_recovery=True) == (et(2025, 10, 16, 8), True)
 
 
 @pytest.mark.parametrize("now,expected", [
@@ -31,5 +34,5 @@ def test_exhausted_or_stopped_waits_for_recovery():
     (et(2025, 11, 1, 12), et(2025, 11, 2, 8)),        # across the autumn DST change
 ])
 def test_recovery_time_is_eight_new_york(now, expected):
-    got = retry.next_recovery_time(now)
+    got = retry.next_recovery_time(now, MARKET_TZ)
     assert got == expected and got.tzinfo == dt.timezone.utc

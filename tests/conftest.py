@@ -16,3 +16,9 @@ def no_network(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", guard)
     monkeypatch.setattr(socket, "create_connection", guard)
+
+
+@pytest.fixture(autouse=True)
+def synthetic_calendar_exceptions(tmp_path):
+    """Every test starts with a private, explicitly empty exceptions file."""
+    (tmp_path / "exceptions.yaml").write_text("{}\n", encoding="utf-8")

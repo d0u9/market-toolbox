@@ -1,23 +1,20 @@
 # market-toolbox
 
-A self-hosted dashboard that shows the daily Elder Impulse state of any list
-of US-listed tickers (the demo config tracks QQQ and VOO). Pick a symbol in the
-sidebar; the page shows that one symbol, and the URL (`?symbol=QQQ`) links
-straight to it. The UI uses [streamlit-shadcn-ui](https://github.com/ObservedObserver/streamlit-shadcn-ui)
-(MIT) components. The candlestick chart uses
-[TradingView Lightweight Charts™](https://www.tradingview.com/lightweight-charts/)
-5.2.1 (Apache-2.0), vendored in `static/lightweight-charts/` (served by Streamlit and cached by
-the browser) so the page needs
-no CDN; its attribution is shown on the chart and in the page footer. Add a symbol by adding it to
-`symbols` in the config; nothing else changes.
-After each US trading session a background worker fetches daily bars, validates
-them, computes EMA13 / MACD(12,26,9) and publishes a snapshot to SQLite. A
-Streamlit page reads that local cache only. The supported runtime runs both in
-one Python process: the updater is a background thread started once at server
-startup, even when no browser is connected. Page reruns and additional sessions
-do not start additional updaters. Existing snapshots are refreshed once on startup
-to apply current calculation settings; a restart alone does not bypass pending
-retry delays.
+A self-hosted daily Elder Impulse dashboard for stocks and ETFs across trading
+calendars. Configure symbols in calendar groups, such as NASDAQ, SSE or ASX;
+each group uses its own sessions, timezone, holidays and update delay. Calendar
+support and Yahoo symbol coverage are separate: confirm both before adding a
+market. Only daily stock/ETF bars are supported; overnight futures sessions and
+intraday trading are outside this application's date model.
+
+The UI uses [streamlit-shadcn-ui](https://github.com/ObservedObserver/streamlit-shadcn-ui)
+(MIT). The chart uses vendored [TradingView Lightweight Charts](https://www.tradingview.com/lightweight-charts/)
+5.2.1 (Apache-2.0), with no CDN dependency. The page reads SQLite only. A single
+background update thread fetches and validates bars, computes EMA13 / MACD(12,26,9),
+and atomically publishes snapshots. It starts without a browser and is shared by
+all sessions. Calendar failures are isolated by group; provider requests remain
+sequential to keep resource use low. A slow request can delay subsequent symbols.
+Startup refreshes saved snapshots without bypassing pending retries.
 
 It shows completed daily bars only. There are no real-time quotes, no trading
 and no buy/sell signals. Data comes from Yahoo Finance through `yfinance` for
@@ -55,14 +52,12 @@ directory. Keep a real config outside the repository or name it
 
 | Key | Default | Meaning |
 |---|---|---|
-| `symbols` | `["QQQ", "VOO"]` | Tickers to track |
+| `markets` | NASDAQ: QQQ; NYSE: VOO | Calendar groups, each with `symbols` and `update_delay_minutes` |
 | `data_provider` | `yahoo` | Only `yahoo` is implemented; `stooq` is reserved and rejected |
-| `market_calendar` | `NYSE` | Session calendar |
 | `calendar_exceptions_path` | `calendar_exceptions.yaml` | Confirmed closures / early closes |
-| `display_timezone` | `UTC` | IANA zone for timestamps on the page only |
+| `display_timezone` | `browser` | Device timezone, or an explicit IANA zone for every visitor; browser detection falls back to UTC |
 | `history_years` | `5` | Calendar years fetched on every update |
 | `warmup_bars` | `250` | Leading bars without a valid Elder state |
-| `update_delay_minutes` | `30` | Wait after the session close before fetching |
 | `sqlite_path` | `data/market.sqlite3` | Database |
 | `run_export_dir` | `data/exports` | Daily CSV export of `update_runs` (last 7 kept) |
 | `request_timeout_seconds` | `30` | Provider request timeout |
@@ -70,8 +65,59 @@ directory. Keep a real config outside the repository or name it
 | `web_host` | `0.0.0.0` | Web server bind address |
 | `web_port` | `8501` | Web server port inside the container or local process |
 
-EMA13 and MACD(12,26,9) are fixed. Market logic always uses `America/New_York`.
-Stored timestamps are in UTC.
+`markets` keys are exact names accepted by the installed calendar library. Aliases
+are preserved: a NASDAQ group is not renamed to NYSE even when they share backend
+rules. For example (a partial config):
+
+```json
+{
+  "markets": {
+    "NASDAQ": {"symbols": ["QQQ"], "update_delay_minutes": 30},
+    "SSE": {"symbols": ["600000.SS"], "update_delay_minutes": 30},
+    "ASX": {"symbols": ["BHP.AX"], "update_delay_minutes": 30}
+  },
+  "display_timezone": "browser"
+}
+```
+
+These symbols illustrate configuration, not recommendations or personal holdings.
+A group's delay defaults to 30 minutes when omitted. Calendar timezone comes from
+the calendar library and cannot be overridden separately. Symbols must be unique
+across all groups and must use Yahoo's complete symbol spelling. Unknown keys,
+unknown calendars, empty groups and duplicate symbols fail at startup. Changing
+a symbol's group forces a new publication; saved data retains its original group,
+timezone, calendar version, quote unit and date-normalization version.
+
+EMA13 and MACD(12,26,9) are fixed. Session dates remain market dates; they do not
+change with the viewer's location. Instants are stored and compared in UTC.
+Log timestamps and daily export names use UTC. Browser timezone is per session;
+no location permission or custom browser component is needed.
+
+`calendar_exceptions.yaml` is one mapping keyed by the same configured group names:
+
+```yaml
+ASX:
+  early_closes:
+    - {date: "2099-01-03", close_time: "13:00", reason: "Example confirmed early close"}
+```
+
+This is a format example, not an actual exchange announcement. Dates and times
+use that group's calendar timezone. Omitted groups have no manual exceptions.
+A missing file, unknown group or invalid group is reported; the updater retains
+that group's last valid rules if available. Without valid rules it skips that
+group. If no group has usable rules, startup fails. Only the affected group's
+rules version changes. Calendar packages may estimate future holidays; confirm
+exchange announcements and maintain exceptions when necessary.
+
+### Database and configuration compatibility
+
+The current schema is version 2. It requires grouped configuration; the old
+`symbols`, `market_calendar` and global `update_delay_minutes` keys are rejected.
+Schema 1 databases are rejected without modification. No automatic migration,
+delete, reset or dual-format compatibility is provided. For an existing setup,
+stop the old process, update the private config, and select a fresh `sqlite_path`
+(such as `data/market-v2.sqlite3`) before restarting. Keep or remove old files
+separately as needed; the application never clears them itself.
 
 ## Run locally
 
@@ -83,7 +129,7 @@ pip install -r requirements-dev.txt
 python -m pytest
 python worker.py --once      # one manual update (shares the writer lock)
                              # exit 0 ok, 1 not up to date, 2 bad config,
-                             # 3 another writer running, 4 data dir not writable
+                             # 3 another writer running, 4 data dir not writable, 5 schema mismatch
 python runtime.py            # web + background updater in one process
 ```
 
@@ -223,12 +269,15 @@ Troubleshooting:
   writable by the container user (`APP_UID`/`APP_GID`).
 - "Waiting for data": the target session is not available from the source
   yet. Retries run after 5, 15 and 30 minutes, then hourly, up to 8 attempts
-  in total. After that, one recovery attempt runs each day at 08:00 New York time.
+  in total. After that, one recovery attempt runs each day at 08:00 in that symbol's market timezone.
 - Two rate-limit errors in a row stop retries until the 08:00 recovery attempt.
 - `another writer holds .../.worker.lock`: a worker is already running.
 
 ## Data rules
 
+- Quote units come from source metadata and are shown without currency conversion.
+  Missing units are labeled unknown; no USD or country currency is assumed. Small
+  prices use additional decimal places rather than being rounded to zero.
 - Prices use yfinance `auto_adjust=True` (split- and dividend-adjusted). They
   are not historical traded prices. Other platforms may differ if they use
   unadjusted prices or another EMA seed.
@@ -240,6 +289,9 @@ Troubleshooting:
 - A single missing session mid-history is published with a warning. The 100
   bars after it are flagged, and the page shows a warning while any flagged bar
   is in view.
+- The validator expects a bar on each exchange session. It cannot distinguish an
+  individual stock suspension from missing provider data, and keeps strict gap
+  checks rather than inventing bars.
 - Missing days are never filled in. A confirmed closure goes in
   `calendar_exceptions.yaml`, never a day the source simply failed to deliver.
 
@@ -257,12 +309,14 @@ unavailable: missing values or warmup
 ## Portability notes
 
 - `locking.py` uses `fcntl.flock`, so it runs on POSIX systems only (Linux, macOS).
-- The test suite passed on Linux under several `TZ`/`LANG` settings, with both
-  the locked dependency versions and newer pandas. The Docker image was built
-  and run on Linux x86_64 only. arm64 and macOS were not tested.
-- The Yahoo request and retry paths still need to be verified from the actual
-  deployment server: data-center IPs are often rate-limited. Yahoo was not
-  reachable from the environment this was developed in.
+- Use `python runtime.py` (or its absolute path). Runtime loads Streamlit settings
+  next to `app.py`, so startup does not require the repository as the working directory.
+- Container port mappings still need to match `web_port` in the private config;
+  the documented Docker commands use internal port 8501. The healthcheck reads
+  the configured bind address and port.
+- Calendar and provider tests use synthetic data only. See [assumption review](ASSUMPTIONS.md)
+  for the supported boundaries and checks. Real Yahoo delivery must be checked
+  from the deployment network; no guarantee is made about source availability.
 
 ## Differences from the design document (v1.2)
 
@@ -271,6 +325,8 @@ unavailable: missing values or warmup
   more professional candlestick view (bar width, crosshair, scrolling).
 
 - Configuration uses the single JSON file described above instead of a `.env` file.
-- The default display time zone is `UTC`; set your own in a local config.
+- Device timezone is the default for display, with UTC fallback. Trading dates use
+  the configured group's calendar; the original US-only design is extended to
+  multiple calendar groups.
 - The design lists `.env.example`; it is replaced by the JSON config plus the
   compose variables documented above.

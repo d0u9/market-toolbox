@@ -1,15 +1,23 @@
 {
-  "symbols": [
-    "QQQ",
-    "VOO"
-  ],
+  "markets": {
+    "NASDAQ": {
+      "symbols": [
+        "QQQ"
+      ],
+      "update_delay_minutes": 30
+    },
+    "NYSE": {
+      "symbols": [
+        "VOO"
+      ],
+      "update_delay_minutes": 30
+    }
+  },
   "data_provider": "yahoo",
-  "market_calendar": "NYSE",
   "calendar_exceptions_path": "calendar_exceptions.yaml",
-  "display_timezone": "UTC",
+  "display_timezone": "browser",
   "history_years": 5,
   "warmup_bars": 250,
-  "update_delay_minutes": 30,
   "sqlite_path": "data/market.sqlite3",
   "run_export_dir": "data/exports",
   "request_timeout_seconds": 30,

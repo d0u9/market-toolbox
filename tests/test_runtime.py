@@ -165,3 +165,44 @@ def test_main_bad_config_never_starts_server(tmp_path, monkeypatch, capsys):
     assert runtime.main() == 2
     assert "web_port" in capsys.readouterr().err
     assert calls == []
+
+
+def test_main_loads_project_streamlit_settings_outside_repo(tmp_path, monkeypatch):
+    import json
+    from config import ENV_VAR
+    from streamlit import config as streamlit_config
+    from streamlit.runtime import Runtime
+
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps(TEST_CONFIG), encoding='utf-8')
+    monkeypatch.setenv(ENV_VAR, str(path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Runtime, '_instance', None)
+    monkeypatch.setattr(streamlit_config, '_main_script_path', None)
+    monkeypatch.setattr(streamlit_config, '_config_options', streamlit_config._config_options)
+
+    async def serve(cfg, server):
+        assert streamlit_config.get_option('server.enableStaticServing') is True
+        assert streamlit_config.get_option('browser.gatherUsageStats') is False
+        assert streamlit_config.get_option('theme.base') == 'light'
+        return 0
+
+    monkeypatch.setattr(runtime, 'serve', serve)
+    assert runtime.main() == 0
+
+
+@pytest.mark.parametrize('host,expected_host', [('0.0.0.0', '127.0.0.1'), ('::1', '[::1]')])
+def test_container_healthcheck_reads_global_address_and_port(tmp_path, monkeypatch, host, expected_host):
+    from pathlib import Path
+    import urllib.request
+    import yaml
+    import config
+
+    cfg = build_config({**TEST_CONFIG, 'web_host': host, 'web_port': 9876}, tmp_path / 'config.json')
+    monkeypatch.setattr(config, 'load_config', lambda: cfg)
+    requests = []
+    monkeypatch.setattr(urllib.request, 'urlopen', lambda url, **kwargs: requests.append(url))
+    compose = yaml.safe_load((Path(runtime.__file__).parent / 'compose.yaml').read_text(encoding='utf-8'))
+    program = compose['services']['app']['healthcheck']['test'][3]
+    exec(compile(program, '<healthcheck>', 'exec'), {})
+    assert requests == [f'http://{expected_host}:9876/_stcore/health']

@@ -87,3 +87,29 @@ def test_stop_prevents_more_symbol_requests(config_file, monkeypatch, tmp_path, 
         conn.close()
     with WriterLock(cfg.lock_path):
         pass
+
+
+def test_schema_mismatch_has_own_exit_code_and_releases_lock(config_file, tmp_path):
+    import sqlite3
+    from config import load_config
+    from locking import WriterLock
+
+    cfg = load_config()
+    cfg.data_dir.mkdir()
+    with sqlite3.connect(cfg.sqlite_path) as conn:
+        conn.execute('CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)')
+        conn.execute("INSERT INTO meta VALUES ('schema_version', '1')")
+    assert worker.main(['--once']) == 5
+    with WriterLock(cfg.lock_path):
+        pass
+
+
+def test_once_reports_failed_refresh_even_with_saved_current_data(config_file, monkeypatch):
+    from providers.base import NetworkError
+
+    provider = FakeProvider()
+    monkeypatch.setattr(worker, 'get_provider', lambda *args: provider)
+    monkeypatch.setattr(worker, 'utcnow', lambda: et(2025, 10, 15, 17))
+    assert worker.main(['--once']) == 0
+    provider.errors['TEST1'] = [NetworkError('synthetic outage')]
+    assert worker.main(['--once']) == 1

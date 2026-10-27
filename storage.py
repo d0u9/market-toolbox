@@ -18,7 +18,7 @@ import pandas as pd
 
 from services import status
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 10_000
 SNAPSHOT_RUN_RETENTION_DAYS = 90
 EXPORT_KEEP = 7
@@ -33,9 +33,20 @@ CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS market_state (
+    market TEXT PRIMARY KEY,
+    exceptions_text TEXT,
+    exceptions_version TEXT,
+    error TEXT
+);
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
+    market TEXT NOT NULL,
+    market_timezone TEXT NOT NULL,
+    calendar_version TEXT NOT NULL,
+    normalization_version TEXT NOT NULL,
+    quote_currency TEXT,
     target_session TEXT NOT NULL,
     latest_session TEXT NOT NULL,
     source TEXT NOT NULL,
@@ -61,6 +72,7 @@ CREATE TABLE IF NOT EXISTS daily_values (
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS symbol_state (
     symbol TEXT PRIMARY KEY,
+    market TEXT NOT NULL REFERENCES market_state(market),
     current_snapshot_id INTEGER REFERENCES snapshots(id),
     previous_snapshot_id INTEGER REFERENCES snapshots(id),
     last_checked_at TEXT,
@@ -78,6 +90,7 @@ CREATE TABLE IF NOT EXISTS symbol_state (
 CREATE TABLE IF NOT EXISTS update_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
+    market TEXT NOT NULL,
     target_session TEXT NOT NULL,
     started_at TEXT NOT NULL,
     finished_at TEXT,
@@ -97,6 +110,8 @@ STATE_FIELDS = {
 
 
 def iso(ts: dt.datetime | None) -> str | None:
+    if ts is not None and (ts.tzinfo is None or ts.utcoffset() is None):
+        raise ValueError("timestamps must include a timezone")
     return None if ts is None else ts.astimezone(dt.timezone.utc).isoformat(timespec="seconds")
 
 
@@ -114,15 +129,25 @@ def _connect(target: Path | str, **kwargs: Any) -> sqlite3.Connection:
 def connect_rw(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = _connect(path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    with transaction(conn):
-        for stmt in filter(str.strip, SCHEMA.split(";")):
-            conn.execute(stmt)
-        conn.execute(
-            "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
-            (str(SCHEMA_VERSION),),
-        )
+    try:
+        if conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
+            check_schema(conn)
+    except BaseException:
+        conn.close()
+        raise
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        with transaction(conn):
+            for stmt in filter(str.strip, SCHEMA.split(";")):
+                conn.execute(stmt)
+            conn.execute(
+                "INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)",
+                (str(SCHEMA_VERSION),),
+            )
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -130,7 +155,30 @@ def connect_ro(path: Path) -> sqlite3.Connection:
     """Open read-only. Raises ``FileNotFoundError`` until the worker creates it."""
     if not path.exists():
         raise FileNotFoundError(path)
-    return _connect(path.resolve().as_uri() + "?mode=ro", uri=True, check_same_thread=False)
+    conn = _connect(path.resolve().as_uri() + "?mode=ro", uri=True, check_same_thread=False)
+    try:
+        check_schema(conn)
+    except BaseException:
+        conn.close()
+        raise
+    return conn
+
+
+class SchemaError(ValueError):
+    """The database belongs to an unsupported schema; never upgrade it implicitly."""
+
+
+def check_schema(conn: sqlite3.Connection) -> None:
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    version = None if row is None else row[0]
+    if version is None and not conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
+        raise FileNotFoundError("The database has not been initialized yet")
+    if version != str(SCHEMA_VERSION):
+        raise SchemaError(f"Database schema {version!r} is unsupported; expected {SCHEMA_VERSION}. "
+                          "Use a fresh database path. Existing data was not changed.")
 
 
 @contextlib.contextmanager
@@ -146,10 +194,33 @@ def transaction(conn: sqlite3.Connection, mode: str = "IMMEDIATE") -> Iterator[N
 
 # --- worker side -----------------------------------------------------------
 
-def ensure_symbols(conn: sqlite3.Connection, symbols: tuple[str, ...]) -> None:
+def ensure_symbols(conn: sqlite3.Connection, symbols: tuple[str, ...], market: str) -> None:
     with transaction(conn):
+        conn.execute("INSERT OR IGNORE INTO market_state(market) VALUES (?)", (market,))
         for s in symbols:
-            conn.execute("INSERT OR IGNORE INTO symbol_state(symbol) VALUES (?)", (s,))
+            conn.execute("INSERT OR IGNORE INTO symbol_state(symbol, market) VALUES (?, ?)", (s, market))
+            conn.execute(
+                """UPDATE symbol_state SET market=?, force_refresh=1, attempts=0,
+                   next_attempt_at=NULL, target_session=NULL, status_detail=NULL,
+                   status=CASE WHEN current_snapshot_id IS NULL THEN ? ELSE ? END
+                   WHERE symbol=? AND market<>?""",
+                (market, status.INITIALIZING, status.WAITING, s, market),
+            )
+
+
+def get_market(conn: sqlite3.Connection, market: str) -> dict | None:
+    row = conn.execute("SELECT * FROM market_state WHERE market=?", (market,)).fetchone()
+    return None if row is None else dict(row)
+
+
+def save_market(conn: sqlite3.Connection, market: str, text: str, version: str) -> None:
+    conn.execute("UPDATE market_state SET exceptions_text=?, exceptions_version=?, error=NULL WHERE market=?",
+                 (text, version, market))
+
+
+def market_error(conn: sqlite3.Connection, market: str, error: str | None) -> None:
+    with transaction(conn):
+        conn.execute("UPDATE market_state SET error=? WHERE market=?", (error, market))
 
 
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
@@ -210,10 +281,12 @@ def publish_snapshot(
     with transaction(conn):
         state = get_state(conn, symbol)
         cur = conn.execute(
-            """INSERT INTO snapshots(symbol, target_session, latest_session, source, adjustment,
+            """INSERT INTO snapshots(symbol, market, market_timezone, calendar_version,
+                   normalization_version, quote_currency, target_session, latest_session, source, adjustment,
                    params_json, fetched_at_utc, calculation_version, exceptions_version,
                    content_hash, quality, gaps_json)
-               VALUES (:symbol, :target_session, :latest_session, :source, :adjustment,
+               VALUES (:symbol, :market, :market_timezone, :calendar_version,
+                   :normalization_version, :quote_currency, :target_session, :latest_session, :source, :adjustment,
                    :params_json, :fetched_at_utc, :calculation_version, :exceptions_version,
                    :content_hash, :quality, :gaps_json)""",
             {"symbol": symbol, **meta},
@@ -256,10 +329,11 @@ def _sql_value(v: Any) -> Any:
 
 def start_run(conn: sqlite3.Connection, symbol: str, target: dt.date, attempt: int, now: dt.datetime) -> int:
     with transaction(conn):
+        market = get_state(conn, symbol)["market"]
         cur = conn.execute(
-            "INSERT INTO update_runs(symbol, target_session, started_at, status, attempt) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (symbol, target.isoformat(), iso(now), status.RUN_RUNNING, attempt),
+            "INSERT INTO update_runs(symbol, market, target_session, started_at, status, attempt) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (symbol, market, target.isoformat(), iso(now), status.RUN_RUNNING, attempt),
         )
     return int(cur.lastrowid)
 

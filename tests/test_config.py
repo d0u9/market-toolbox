@@ -7,7 +7,7 @@ from config import DEMO_CONFIG, ENV_VAR, ConfigError, build_config, load_config,
 
 def test_demo_config_loads_with_generic_values():
     cfg = load_config(DEMO_CONFIG)
-    assert cfg.display_timezone == "UTC"
+    assert cfg.display_timezone == "browser"
     assert cfg.sqlite_path == DEMO_CONFIG.parent / "data" / "market.sqlite3"
     assert cfg.run_export_dir.parent == cfg.sqlite_path.parent
     assert cfg.lock_path.parent == cfg.sqlite_path.parent
@@ -70,3 +70,15 @@ def test_missing_and_malformed_files(tmp_path):
     arr.write_text("[]", encoding="utf-8")
     with pytest.raises(ConfigError, match="JSON object"):
         load_config(arr)
+
+
+def test_non_us_symbol_spelling_is_supported(tmp_path):
+    cfg = build_config({'markets': {'NSE': {'symbols': ['TEST&CO.NS']}}}, tmp_path / 'config.json')
+    assert cfg.symbols == ('TEST&CO.NS',)
+
+
+def test_duplicate_calendar_keys_do_not_silently_drop_symbols(tmp_path):
+    path = tmp_path / 'config.json'
+    path.write_text('{"markets":{"NYSE":{"symbols":["TEST1"]},"NYSE":{"symbols":["FAKEA"]}}}', encoding='utf-8')
+    with pytest.raises(ConfigError, match='duplicate config key.*NYSE'):
+        load_config(path)

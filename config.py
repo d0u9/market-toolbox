@@ -24,19 +24,17 @@ DEMO_CONFIG = PROJECT_ROOT / "config.json"
 # but rejected with a clear message until an adapter is implemented and verified.
 IMPLEMENTED_PROVIDERS = {"yahoo"}
 RESERVED_PROVIDERS = {"stooq"}
-SUPPORTED_CALENDARS = {"NYSE"}
 LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,14}$")
+SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.&\-]{0,63}$")
 
 DEFAULTS: dict[str, Any] = {
-    "symbols": ["QQQ", "VOO"],
+    "markets": {"NASDAQ": {"symbols": ["QQQ"], "update_delay_minutes": 30},
+                "NYSE": {"symbols": ["VOO"], "update_delay_minutes": 30}},
     "data_provider": "yahoo",
-    "market_calendar": "NYSE",
     "calendar_exceptions_path": "calendar_exceptions.yaml",
-    "display_timezone": "UTC",
+    "display_timezone": "browser",
     "history_years": 5,
     "warmup_bars": 250,
-    "update_delay_minutes": 30,
     "sqlite_path": "data/market.sqlite3",
     "run_export_dir": "data/exports",
     "request_timeout_seconds": 30,
@@ -51,16 +49,26 @@ class ConfigError(ValueError):
 
 
 @dataclass(frozen=True)
+class MarketConfig:
+    name: str
+    symbols: tuple[str, ...]
+    timezone: str
+    update_delay_minutes: int
+
+    @property
+    def tz(self) -> ZoneInfo:
+        return ZoneInfo(self.timezone)
+
+
+@dataclass(frozen=True)
 class Config:
     config_path: Path
-    symbols: tuple[str, ...]
+    markets: tuple[MarketConfig, ...]
     data_provider: str
-    market_calendar: str
     calendar_exceptions_path: Path
     display_timezone: str
     history_years: int
     warmup_bars: int
-    update_delay_minutes: int
     sqlite_path: Path
     run_export_dir: Path
     request_timeout_seconds: float
@@ -69,8 +77,11 @@ class Config:
     web_port: int
 
     @property
-    def display_tz(self) -> ZoneInfo:
-        return ZoneInfo(self.display_timezone)
+    def symbols(self) -> tuple[str, ...]:
+        return tuple(symbol for market in self.markets for symbol in market.symbols)
+
+    def market_for(self, symbol: str) -> MarketConfig:
+        return next(market for market in self.markets if symbol in market.symbols)
 
     @property
     def data_dir(self) -> Path:
@@ -93,10 +104,21 @@ def resolve_config_path(environ: dict[str, str] | None = None) -> Path:
 
 def load_config(path: Path | str | None = None) -> Config:
     config_path = Path(path) if path is not None else resolve_config_path()
+
+    def unique_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ConfigError(f"duplicate config key: {key!r}")
+            result[key] = value
+        return result
+
     try:
-        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        raw = json.loads(config_path.read_text(encoding="utf-8"), object_pairs_hook=unique_keys)
     except FileNotFoundError:
         raise ConfigError(f"config file not found: {config_path}") from None
+    except (OSError, UnicodeError) as exc:
+        raise ConfigError(f"config file {config_path} cannot be read: {exc}") from None
     except json.JSONDecodeError as exc:
         raise ConfigError(f"config file {config_path} is not valid JSON: {exc}") from None
     if not isinstance(raw, dict):
@@ -126,14 +148,39 @@ def build_config(raw: dict[str, Any], config_path: Path | str) -> Config:
             raise ConfigError(f"'{key}' must be an integer between {lo} and {hi}")
         return value
 
-    symbols = values["symbols"]
-    if not isinstance(symbols, list) or not symbols:
-        raise ConfigError("'symbols' must be a non-empty list of ticker strings")
-    for s in symbols:
-        if not isinstance(s, str) or not SYMBOL_RE.match(s):
-            raise ConfigError(f"'symbols' contains an invalid ticker: {s!r}")
-    if len(set(symbols)) != len(symbols):
-        raise ConfigError("'symbols' contains duplicates")
+    import pandas_market_calendars as mcal
+
+    raw_markets = values["markets"]
+    if not isinstance(raw_markets, dict) or not raw_markets:
+        raise ConfigError("'markets' must be a non-empty object keyed by calendar name")
+    markets = []
+    seen = set()
+    known_calendars = set(mcal.get_calendar_names())
+    for name, settings in raw_markets.items():
+        key = f"markets.{name}"
+        if name not in known_calendars:
+            raise ConfigError(f"'{key}' is not a registered trading calendar")
+        if not isinstance(settings, dict) or set(settings) - {"symbols", "update_delay_minutes"}:
+            raise ConfigError(f"'{key}' must contain only symbols and update_delay_minutes")
+        symbols = settings.get("symbols")
+        if not isinstance(symbols, list) or not symbols:
+            raise ConfigError(f"'{key}.symbols' must be a non-empty list")
+        for symbol in symbols:
+            if not isinstance(symbol, str) or not SYMBOL_RE.fullmatch(symbol):
+                raise ConfigError(f"'{key}.symbols' contains an invalid ticker: {symbol!r}")
+            if symbol in seen:
+                raise ConfigError(f"'{key}.symbols' contains duplicate ticker {symbol!r}")
+            seen.add(symbol)
+        delay = settings.get("update_delay_minutes", 30)
+        if isinstance(delay, bool) or not isinstance(delay, int) or not 0 <= delay <= 1440:
+            raise ConfigError(f"'{key}.update_delay_minutes' must be an integer between 0 and 1440")
+        try:
+            calendar = mcal.get_calendar(name)
+            timezone = str(calendar.tz)
+            ZoneInfo(timezone)
+        except Exception as exc:
+            raise ConfigError(f"'{key}' cannot load its calendar/timezone: {exc}") from None
+        markets.append(MarketConfig(name, tuple(symbols), timezone, delay))
 
     provider = values["data_provider"]
     if not isinstance(provider, str):
@@ -145,17 +192,14 @@ def build_config(raw: dict[str, Any], config_path: Path | str) -> Config:
             f"'data_provider' must be one of {sorted(IMPLEMENTED_PROVIDERS)}, got {provider!r}"
         )
 
-    calendar = values["market_calendar"]
-    if not isinstance(calendar, str) or calendar not in SUPPORTED_CALENDARS:
-        raise ConfigError(f"'market_calendar' must be one of {sorted(SUPPORTED_CALENDARS)}")
-
     tz = values["display_timezone"]
     try:
         if not isinstance(tz, str):
             raise ZoneInfoNotFoundError
-        ZoneInfo(tz)
+        if tz != "browser":
+            ZoneInfo(tz)
     except (ZoneInfoNotFoundError, ValueError):
-        raise ConfigError(f"'display_timezone' is not a valid IANA time zone: {tz!r}") from None
+        raise ConfigError(f"'display_timezone' must be 'browser' or a valid IANA time zone: {tz!r}") from None
 
     timeout = values["request_timeout_seconds"]
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 1 <= timeout <= 300:
@@ -174,14 +218,12 @@ def build_config(raw: dict[str, Any], config_path: Path | str) -> Config:
 
     return Config(
         config_path=config_path,
-        symbols=tuple(symbols),
+        markets=tuple(markets),
         data_provider=provider,
-        market_calendar=calendar,
         calendar_exceptions_path=path_value("calendar_exceptions_path"),
         display_timezone=tz,
         history_years=history_years,
         warmup_bars=warmup_bars,
-        update_delay_minutes=int_value("update_delay_minutes", 0, 720),
         sqlite_path=path_value("sqlite_path"),
         run_export_dir=path_value("run_export_dir"),
         request_timeout_seconds=float(timeout),

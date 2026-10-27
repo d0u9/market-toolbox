@@ -6,7 +6,7 @@ Usage:
     python worker.py --once    # one manual check (shares the writer lock)
 
 Exit codes: 0 ok; 1 (--once) a symbol is not up to date; 2 bad config;
-3 another writer holds the lock; 4 the data directory is not writable.
+3 another writer holds the lock; 4 the data directory is not writable; 5 schema mismatch.
 """
 
 from __future__ import annotations
@@ -19,13 +19,13 @@ import signal
 import sqlite3
 import sys
 import threading
+import time
 
 import storage
 from config import Config, ConfigError, load_config
 from locking import LockHeld, WriterLock
 from providers.base import get_provider
 from services import status
-from services.calendar import MARKET_TZ
 from services.update import Updater
 
 CHECK_INTERVAL_SECONDS = 60
@@ -37,7 +37,7 @@ def utcnow() -> dt.datetime:
 
 
 def daily_housekeeping(conn, cfg, now: dt.datetime, last_day: dt.date | None) -> dt.date:
-    day = now.astimezone(MARKET_TZ).date()
+    day = now.astimezone(dt.timezone.utc).date()
     if day != last_day:
         storage.prune_runs(conn, now)
         path = storage.export_runs(conn, cfg.run_export_dir, day)
@@ -55,7 +55,8 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
-    logging.basicConfig(level=cfg.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.Formatter.converter = time.gmtime
+    logging.basicConfig(level=cfg.log_level, format="%(asctime)sZ %(levelname)s %(name)s: %(message)s")
 
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
@@ -72,6 +73,10 @@ def run(cfg: Config, stop: threading.Event, *, once: bool = False) -> int:
     except LockHeld as exc:
         log.error("%s; is the worker already running?", exc)
         return 3
+    except storage.SchemaError as exc:
+        lock.release()
+        log.error("%s", exc)
+        return 5
     except (OSError, sqlite3.OperationalError) as exc:
         lock.release()
         log.error("cannot write to the data directory %s as uid %s: %s",
@@ -96,13 +101,17 @@ def run(cfg: Config, stop: threading.Event, *, once: bool = False) -> int:
                 break
         if once and not stop.is_set():
             not_updated = [s for s in cfg.symbols
-                           if storage.get_state(conn, s)["status"] != status.UPDATED]
+                           if storage.get_state(conn, s)["status"] != status.UPDATED
+                           or storage.get_state(conn, s)["force_refresh"]
+                           or storage.get_market(conn, cfg.market_for(s).name)["error"]]
             if not_updated:
                 log.warning("not up to date: %s", ", ".join(not_updated))
                 return 1
     finally:
-        conn.close()
-        lock.release()
+        try:
+            conn.close()
+        finally:
+            lock.release()
     return 0
 
 

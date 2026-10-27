@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -34,7 +35,7 @@ class YahooProvider:
             yf.set_tz_cache_location(str(cache_dir))
 
     def fetch_daily(
-        self, symbol: str, start_date: dt.date, end_date_exclusive: dt.date
+        self, symbol: str, start_date: dt.date, end_date_exclusive: dt.date, market_timezone: str
     ) -> DailyBars:
         import yfinance as yf
 
@@ -48,7 +49,8 @@ class YahooProvider:
             "yfinance_version": getattr(yf, "__version__", "unknown"),
         }
         try:
-            raw = yf.Ticker(symbol).history(
+            ticker = yf.Ticker(symbol)
+            raw = ticker.history(
                 start=params["start"],
                 end=params["end"],
                 interval="1d",
@@ -63,16 +65,17 @@ class YahooProvider:
 
         if raw is None or raw.empty:
             raise DataNotFound(f"no rows returned for {symbol}")
+        params["currency"] = ticker.get_history_metadata().get("currency")
         return DailyBars(
             symbol=symbol,
-            frame=normalize_frame(raw),
+            frame=normalize_frame(raw, market_timezone),
             source=self.name,
             adjustment=ADJUSTMENT,
             params=params,
         )
 
 
-def normalize_frame(raw: pd.DataFrame) -> pd.DataFrame:
+def normalize_frame(raw: pd.DataFrame, market_timezone: str) -> pd.DataFrame:
     rename = {c: c.lower() for c in raw.columns}
     frame = raw.rename(columns=rename)
     missing = [c for c in BAR_COLUMNS if c not in frame.columns]
@@ -80,9 +83,14 @@ def normalize_frame(raw: pd.DataFrame) -> pd.DataFrame:
         raise ProviderError(f"provider response is missing columns: {missing}")
     frame = frame[BAR_COLUMNS].astype("float64")
     index = pd.DatetimeIndex(frame.index)
-    if index.tz is not None:
-        # Yahoo stamps daily bars in the exchange time zone; keep the market date.
-        index = index.tz_convert("America/New_York")
+    if index.tz is None:
+        raise ProviderError("Yahoo daily bars have no exchange timezone")
+    expected_tz = ZoneInfo(market_timezone)
+    # Yahoo daily bars are stamped in the exchange timezone. Reject a wrong
+    # assignment before converting; equivalent IANA aliases are allowed.
+    if any(ts.utcoffset() != ts.tz_convert(expected_tz).utcoffset() for ts in index):
+        raise ProviderError(f"source timezone {index.tz} conflicts with configured market timezone {market_timezone}")
+    index = index.tz_convert(expected_tz)
     frame.index = pd.Index([ts.date() for ts in index], name="session_date")
     return frame.sort_index()
 

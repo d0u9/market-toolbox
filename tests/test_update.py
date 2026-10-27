@@ -6,7 +6,9 @@ import pytest
 import storage
 from providers.base import NetworkError, RateLimited
 from services import retry
-from services.calendar import MARKET_TZ
+from zoneinfo import ZoneInfo
+
+MARKET_TZ = ZoneInfo("America/New_York")
 from services.retry import MAX_ATTEMPTS, next_recovery_time
 from services.status import FAILED as STATUS_FAILED
 from services.status import INITIALIZING as STATUS_INITIALIZING
@@ -14,6 +16,11 @@ from services.status import UPDATED as STATUS_UPDATED
 from services.status import WAITING as STATUS_WAITING
 from services.update import Updater
 from tests.fakes import FakeProvider, et, make_config, recent_runs
+
+def write_exceptions(cfg, text, **kwargs):
+    from textwrap import indent
+    cfg.calendar_exceptions_path.write_text("NYSE:\n" + indent(text, "  "), encoding="utf-8")
+
 
 D = dt.date
 WED = D(2025, 10, 15)
@@ -195,7 +202,7 @@ def test_consecutive_rate_limits_stop_until_recovery(env):
     assert first - NOW_WED < dt.timedelta(minutes=6)
     updater.process_symbol("TEST1", WED, first)
     s = state(conn)
-    assert storage.parse_ts(s["next_attempt_at"]) == next_recovery_time(first)
+    assert storage.parse_ts(s["next_attempt_at"]) == next_recovery_time(first, MARKET_TZ)
     assert "rate_limited" in s["status_detail"]
 
 
@@ -285,7 +292,7 @@ def test_exceptions_change_forces_recalculation(env):
     cfg, conn, provider, updater = env
     updater.tick(NOW_WED)
     old_hash = current(conn)["content_hash"]
-    cfg.calendar_exceptions_path.write_text(
+    write_exceptions(cfg,
         "closures: []\nearly_closes:\n  - {date: '2025-10-01', close_time: '13:00', reason: test}\n",
         encoding="utf-8",
     )
@@ -297,16 +304,16 @@ def test_exceptions_change_forces_recalculation(env):
 
 def test_invalid_exceptions_keep_previous(env, caplog):
     cfg, conn, provider, updater = env
-    cfg.calendar_exceptions_path.write_text(
+    write_exceptions(cfg,
         "closures:\n  - {date: '2025-06-02', reason: confirmed test closure}\n", encoding="utf-8"
     )
     provider.drop["TEST1"] = {D(2025, 6, 2)}
     updater.tick(NOW_WED)
     assert state(conn)["quality"] == "complete"  # confirmed closure is not a gap
-    cfg.calendar_exceptions_path.write_text("closures: [\n", encoding="utf-8")
+    write_exceptions(cfg, "closures: [\n", encoding="utf-8")
     updater.tick(NOW_WED + dt.timedelta(minutes=1))
-    assert "keeping previous version" in caplog.text
-    assert D(2025, 6, 2) in updater.exceptions.closures
+    assert "not loaded" in caplog.text
+    assert D(2025, 6, 2) in updater.calendars["NYSE"].exceptions.closures
 
 
 def test_forced_refresh_failure_keeps_updated_status(env):
@@ -349,31 +356,35 @@ def test_new_target_shows_waiting_before_attempt(env):
 
 def test_invalid_exceptions_at_startup_use_last_valid_version(env):
     cfg, conn, provider, updater = env
-    cfg.calendar_exceptions_path.write_text(
+    write_exceptions(cfg,
         "closures:\n  - {date: '2025-06-02', reason: confirmed test closure}\n", encoding="utf-8"
     )
     updater.tick(NOW_WED)
-    good_version = updater.exceptions.version
-    cfg.calendar_exceptions_path.write_text("closures: [\n", encoding="utf-8")
+    good_version = updater.calendars["NYSE"].exceptions.version
+    write_exceptions(cfg, "closures: [\n", encoding="utf-8")
     restarted = Updater(cfg, conn, provider)  # worker restart with a broken file
-    assert restarted.exceptions.version == good_version
-    assert D(2025, 6, 2) in restarted.exceptions.closures
-    assert D(2025, 6, 2) not in restarted.calendar.sessions(D(2025, 6, 1), D(2025, 6, 4))
+    assert restarted.calendars["NYSE"].exceptions.version == good_version
+    assert D(2025, 6, 2) in restarted.calendars["NYSE"].exceptions.closures
+    assert D(2025, 6, 2) not in restarted.calendars["NYSE"].sessions(D(2025, 6, 1), D(2025, 6, 4))
 
 
 def test_invalid_exceptions_on_first_ever_start(tmp_path, caplog):
+    from services.calendar import CalendarExceptionsError
+
     cfg = make_config(tmp_path)
-    cfg.calendar_exceptions_path.write_text("closures: [\n", encoding="utf-8")
+    write_exceptions(cfg, "closures: [\n")
     conn = storage.connect_rw(cfg.sqlite_path)
-    updater = Updater(cfg, conn, FakeProvider())
-    assert updater.exceptions.closures == {}
-    assert "no earlier valid calendar exceptions" in caplog.text
-    conn.close()
+    try:
+        with pytest.raises(CalendarExceptionsError, match="No usable"):
+            Updater(cfg, conn, FakeProvider())
+        assert "not loaded" in caplog.text
+    finally:
+        conn.close()
 
 
 def test_target_cache_follows_market_date(env):
     cfg, conn, provider, updater = env
-    cal = updater.calendar
+    cal = updater.calendars["NYSE"]
     assert cal.target_session(NOW_WED, 30) == WED
     assert cal.target_session(NOW_THU, 30) == THU
     assert cal.target_session(et(2025, 10, 16, 9), 30) == WED

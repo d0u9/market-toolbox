@@ -80,3 +80,14 @@ def test_html_loads_library_and_escapes_payload():
 def test_vendored_library_is_present():
     assert LIBRARY_FILE.read_text(encoding="utf-8").lstrip().startswith("/*!")
     assert "Lightweight Charts" in LIBRARY_FILE.read_text(encoding="utf-8")[:300]
+
+
+def test_small_quote_values_keep_precision():
+    values = make_values()
+    for column in ('open', 'high', 'low', 'close', 'ema13', 'ema26', 'histogram'):
+        values[column] *= 0.000001
+    payload = chart_payload(values, '1Y')
+    assert payload['price_precision'] >= 6
+    assert payload['histogram_precision'] > 3
+    assert all(point['close'] > 0 for point in payload['price'])
+    assert payload['price'][0]['close'] == select_range(values, '3Y')['close'].iloc[0]

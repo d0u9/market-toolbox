@@ -17,10 +17,10 @@ import streamlit_shadcn_ui as ui
 
 import storage
 from charts import (
-    LIBRARY_PATH, RANGES, STATE_DETAIL, STATE_SHORT, chart_html, chart_payload, select_range,
+    LIBRARY_PATH, RANGES, STATE_DETAIL, STATE_SHORT, chart_html, chart_payload, select_range, number_precision,
 )
 from config import ConfigError, load_config
-from page_helpers import symbol_picker
+from page_helpers import symbol_picker, display_zone
 from services import status
 from services.status import QUALITY_TEXT, STATUS_TEXT
 
@@ -51,11 +51,15 @@ st.set_page_config(page_title=TITLE, layout="wide")
 SnapshotKey = tuple[int, str]
 
 
+def display_tz():
+    return display_zone(CFG.display_timezone, st.context.timezone)
+
+
 def fmt_ts(value: str | None) -> str:
     ts = storage.parse_ts(value)
     if ts is None:
         return "—"
-    return ts.astimezone(CFG.display_tz).strftime("%Y-%m-%d %H:%M %Z")
+    return ts.astimezone(display_tz()).strftime("%Y-%m-%d %H:%M %Z")
 
 
 def open_connection():
@@ -67,6 +71,8 @@ def open_connection():
 def database_ready() -> bool:
     try:
         conn = open_connection()
+    except storage.SchemaError:
+        raise
     except Exception:
         return False
     try:
@@ -127,14 +133,17 @@ def render_symbol(conn, symbol: str) -> tuple[str | None, SnapshotKey | None, bo
     elder = last["elder_state"]
     label, detail = STATE_SHORT[elder], STATE_DETAIL[elder]
     st.subheader(symbol, anchor=False)
-    st.caption(f"{latest.isoformat()} · adjusted prices · Elder state: {label}"
+    st.caption(f"{latest.isoformat()} · {snapshot['market']} ({snapshot['market_timezone']}) · "
+               f"quote unit: {snapshot['quote_currency'] or 'not supplied'} · adjusted prices · Elder state: {label}"
                + (f" ({detail})" if detail else ""))
 
+    price_digits = number_precision(values["low"])
+    hist_digits = number_precision(values["histogram"], 3)
     stats = [
-        ("Close", f"{last['close']:,.2f}", f"{(last['close'] / prev['close'] - 1) * 100:+.2f}%",
+        ("Close", f"{last['close']:,.{price_digits}f}", f"{(last['close'] / prev['close'] - 1) * 100:+.2f}%",
          "from previous day"),
-        ("EMA13", f"{last['ema13']:.2f}", f"{last['ema13'] - prev['ema13']:+.2f}", "from previous day"),
-        ("MACD histogram", f"{last['histogram']:.3f}", f"{last['histogram'] - prev['histogram']:+.3f}",
+        ("EMA13", f"{last['ema13']:.{price_digits}f}", f"{last['ema13'] - prev['ema13']:+.{price_digits}f}", "from previous day"),
+        ("MACD histogram", f"{last['histogram']:.{hist_digits}f}", f"{last['histogram'] - prev['histogram']:+.{hist_digits}f}",
          "from previous day"),
         ("Elder state", label, None, detail or None),
     ]
@@ -188,15 +197,24 @@ def status_panel(symbol: str, shown_key: SnapshotKey | None, gap_in_display: boo
         return
     try:
         state, snapshot = storage.read_symbol(conn, symbol)
+        market_state = storage.get_market(conn, CFG.market_for(symbol).name)
     finally:
         conn.close()
     if snapshot_key(snapshot) != shown_key:
         st.rerun(scope="app")  # a new snapshot was published: redraw the chart
+    if market_state and market_state["error"]:
+        ui.alert("Calendar rules need attention", market_state["error"], variant="destructive",
+                 key=f"calendar-alert-{symbol}")
     if state is None or snapshot is None:
         if state and state.get("status_detail"):
             st.caption(state["status_detail"])
         return
 
+    configured = CFG.market_for(symbol)
+    if snapshot["market"] != configured.name or snapshot["market_timezone"] != configured.timezone:
+        ui.alert("Market assignment changed", f"Showing saved data from {snapshot['market']} "
+                 f"({snapshot['market_timezone']}); configured market is {configured.name} "
+                 f"({configured.timezone}). Waiting for a successful refresh.", key=f"market-changed-{symbol}")
     current = state["status"]
     quality = quality_line(state, gap_in_display)
     ui.badges([(STATUS_TEXT.get(current, current),
@@ -234,13 +252,16 @@ def page_status() -> None:
     if seen is None or now - seen > WORKER_STALE_AFTER:
         st.warning(f"The update worker has not checked in since {fmt_ts(heartbeat)}. "
                    "Data will not refresh until it is running again.")
-    st.caption(f"Page checked {now.astimezone(CFG.display_tz).strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    st.caption(f"Page checked {now.astimezone(display_tz()).strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
 
-def latest_quotes(symbols) -> dict[str, tuple[str, float, float | None] | None]:
-    """Latest (Elder label, close, day change %) per symbol; None when there is no data."""
-    quotes: dict[str, tuple[str, float, float | None] | None] = dict.fromkeys(symbols)
-    if not database_ready():
+def latest_quotes(symbols) -> dict[str, tuple[str, float, float | None, str | None] | None]:
+    """Latest (Elder label, close, day change %, quote unit); None without data."""
+    quotes: dict[str, tuple[str, float, float | None, str | None] | None] = dict.fromkeys(symbols)
+    try:
+        if not database_ready():
+            return quotes
+    except storage.SchemaError:
         return quotes
     conn = open_connection()
     try:
@@ -253,7 +274,7 @@ def latest_quotes(symbols) -> dict[str, tuple[str, float, float | None] | None]:
                 continue
             last = values.iloc[-1]
             pct = (last["close"] / values.iloc[-2]["close"] - 1) * 100 if len(values) > 1 else None
-            quotes[sym] = (STATE_SHORT[last["elder_state"]], float(last["close"]), pct)
+            quotes[sym] = (STATE_SHORT[last["elder_state"]], float(last["close"]), pct, snapshot["quote_currency"])
     except Exception:
         pass  # the main panel reports read errors
     finally:
@@ -287,7 +308,9 @@ def watchlist_sidebar(symbols, current: str) -> str:
                                 side.text("No data yet", variant="muted")
                             else:
                                 change = "" if quote[2] is None else f" · {quote[2]:+.2f}%"
-                                side.text(f"{quote[1]:,.2f}{change}", variant="muted")
+                                digits = number_precision([quote[1]])
+                                unit = quote[3] or "quote unit unknown"
+                                side.text(f"{quote[1]:,.{digits}f} {unit}{change}", variant="muted")
                             views[sym] = side.button(
                                 "Viewing" if sym == current else "View", key=f"view-{sym}",
                                 variant="default" if sym == current else "outline", size="sm",
@@ -310,8 +333,8 @@ with ui.elements(key="page-header") as header:
     with header.card():
         with header.card_header():
             header.heading(TITLE, level=2)
-            header.text(f"Times shown in {CFG.display_timezone}. Trading dates are US/Eastern "
-                        "market dates. Colors show the Elder Impulse state, not up/down days.",
+            header.text(f"Times shown in {display_tz().key}. Trading dates follow each symbol’s "
+                        "market calendar. Colors show the Elder Impulse state, not up/down days.",
                         variant="muted")
 
 with st.sidebar:
@@ -329,7 +352,12 @@ with st.sidebar:
     selected = selected if selected in CFG.symbols else initial
     st.query_params["symbol"] = selected
 
-if not database_ready():
+try:
+    ready = database_ready()
+except storage.SchemaError as exc:
+    ui.alert("Database schema mismatch", str(exc), variant="destructive", key="schema-error")
+    st.stop()
+if not ready:
     wait_for_database()
     st.stop()
 

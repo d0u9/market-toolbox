@@ -80,9 +80,9 @@ def test_exceptions_closure_and_early_close(tmp_path):
     assert cal.target_session(et(2025, 10, 16, 12, 29), 30) == D(2025, 10, 14)
 
 
-def test_missing_exceptions_file_is_empty(tmp_path):
-    ex = load_exceptions(tmp_path / "none.yaml")
-    assert ex.closures == {} and ex.early_closes == {}
+def test_missing_exceptions_file_is_an_error(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_exceptions(tmp_path / "none.yaml")
 
 
 @pytest.mark.parametrize("text", [

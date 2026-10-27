@@ -36,9 +36,11 @@ class FakeProvider:
     name = "fake"
 
     def __init__(self, first: dt.date = dt.date(2015, 1, 2), last: dt.date = dt.date(2026, 12, 31),
-                 seed: int = 7) -> None:
+                 seed: int = 7, markets: dict[str, str] | None = None) -> None:
         sessions = MarketCalendar("NYSE").sessions(first, last + dt.timedelta(days=1))
         self.history: dict[str, pd.DataFrame] = {}
+        self.markets = markets or {}
+        self.first, self.last = first, last
         self.seed = seed
         self.sessions = sessions
         self.available_until: dict[str, dt.date] = {}  # simulates data not yet published
@@ -51,10 +53,12 @@ class FakeProvider:
     def frame_for(self, symbol: str) -> pd.DataFrame:
         if symbol not in self.history:
             seed = self.seed + sum(map(ord, symbol))
-            self.history[symbol] = synthetic_bars(self.sessions, seed=seed)
+            sessions = (MarketCalendar(self.markets[symbol]).sessions(self.first, self.last + dt.timedelta(days=1))
+                        if symbol in self.markets else self.sessions)
+            self.history[symbol] = synthetic_bars(sessions, seed=seed)
         return self.history[symbol]
 
-    def fetch_daily(self, symbol: str, start_date: dt.date, end_date_exclusive: dt.date) -> DailyBars:
+    def fetch_daily(self, symbol: str, start_date: dt.date, end_date_exclusive: dt.date, market_timezone: str) -> DailyBars:
         self.calls.append((symbol, start_date, end_date_exclusive))
         queue = self.errors.get(symbol)
         if queue:
@@ -72,13 +76,13 @@ class FakeProvider:
         out = frame[mask].copy()
         if out.empty:
             raise DataNotFound(f"no rows for {symbol}")
-        return DailyBars(symbol, out, self.name, self.adjustment, {"start": str(start_date),
+        return DailyBars(symbol, out, self.name, self.adjustment, {"currency": "TST", "start": str(start_date),
                                                                   "end": str(end_date_exclusive)})
 
 
 # Raw config for tests; paths resolve under the config file's tmp directory.
 TEST_CONFIG = {
-    "symbols": ["TEST1", "FAKEA"],
+    "markets": {"NYSE": {"symbols": ["TEST1", "FAKEA"], "update_delay_minutes": 30}},
     "calendar_exceptions_path": "exceptions.yaml",
     "sqlite_path": "data/market.sqlite3",
     "run_export_dir": "data/exports",

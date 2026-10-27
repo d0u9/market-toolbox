@@ -9,6 +9,7 @@ from typing import Protocol
 import pandas as pd
 
 BAR_COLUMNS = ["open", "high", "low", "close", "volume"]
+NORMALIZATION_VERSION = "market-date-v2"
 
 
 class ProviderError(Exception):
@@ -50,7 +51,7 @@ class DailyBarProvider(Protocol):
     name: str
 
     def fetch_daily(
-        self, symbol: str, start_date: dt.date, end_date_exclusive: dt.date
+        self, symbol: str, start_date: dt.date, end_date_exclusive: dt.date, market_timezone: str
     ) -> DailyBars:
         """Return bars with ``start_date <= session_date < end_date_exclusive``."""
         ...

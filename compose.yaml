@@ -40,7 +40,18 @@ services:
     ports:
       - "127.0.0.1:${WEB_PORT:-8501}:8501"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request
+          from config import load_config
+          cfg = load_config()
+          host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(cfg.web_host, cfg.web_host)
+          if ":" in host:
+              host = f"[{host}]"
+          urllib.request.urlopen(f"http://{host}:{cfg.web_port}/_stcore/health", timeout=5)
       interval: 30s
       timeout: 10s
       retries: 3

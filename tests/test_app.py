@@ -64,7 +64,7 @@ def test_waiting_for_database(tmp_path, monkeypatch):
 
 def test_any_number_of_symbols(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({**TEST_CONFIG, "symbols": ["TEST1", "FAKEA", "FAKEB"]}),
+    path.write_text(json.dumps({**TEST_CONFIG, "markets": {"NYSE": {"symbols": ["TEST1", "FAKEA", "FAKEB"]}}}),
                     encoding="utf-8")
     monkeypatch.setenv(ENV_VAR, str(path))
     cfg = load_config(path)
@@ -79,10 +79,10 @@ def test_any_number_of_symbols(tmp_path, monkeypatch):
 def test_many_symbols_render(tmp_path, monkeypatch):
     symbols = [f"FAKE{i}" for i in range(21)]
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({**TEST_CONFIG, "symbols": symbols}), encoding="utf-8")
+    path.write_text(json.dumps({**TEST_CONFIG, "markets": {"NYSE": {"symbols": symbols}}}), encoding="utf-8")
     monkeypatch.setenv(ENV_VAR, str(path))
     conn = storage.connect_rw(load_config(path).sqlite_path)
-    storage.ensure_symbols(conn, tuple(symbols))
+    storage.ensure_symbols(conn, tuple(symbols), "NYSE")
     conn.close()
     at = run_app("FAKE20")
     assert shown_symbol(at) == "FAKE20"
@@ -178,3 +178,40 @@ def test_watchlist_click_changes_symbol_from_fragment(seeded, monkeypatch):
     rerun_watchlist(at, monkeypatch)
     assert at.query_params["symbol"] == "FAKEA"
     assert shown_symbol(at) == "FAKEA"
+
+
+def test_display_zone_is_explicit_or_per_browser_with_utc_fallback():
+    from page_helpers import display_zone
+
+    assert display_zone('browser', 'Asia/Shanghai').key == 'Asia/Shanghai'
+    assert display_zone('browser', 'Australia/Sydney').key == 'Australia/Sydney'
+    assert display_zone('browser', None).key == 'UTC'
+    assert display_zone('browser', 'Not/AZone').key == 'UTC'
+    assert display_zone('UTC', 'Australia/Sydney').key == 'UTC'
+
+
+def test_page_uses_browser_timezone_and_saved_quote_unit(seeded, monkeypatch):
+    import streamlit as st
+
+    monkeypatch.setattr(type(st.context), 'timezone', property(lambda self: 'Asia/Shanghai'))
+    at = run_app()
+    components = '\n'.join(node.proto.json for node in at.get('bidi_component'))
+    assert 'Times shown in Asia/Shanghai' in components
+    assert any('NYSE (America/New_York)' in c.value and 'quote unit: TST' in c.value for c in at.caption)
+
+
+def test_market_reassignment_never_relabels_saved_data(seeded, monkeypatch, tmp_path):
+    from dataclasses import replace
+    from providers.base import NetworkError
+
+    cfg = load_config()
+    moved = replace(cfg, markets=(replace(cfg.markets[0], name='NASDAQ'),))
+    provider = FakeProvider()
+    provider.errors['TEST1'] = [NetworkError('synthetic outage')]
+    Updater(moved, seeded, provider).tick(et(2025, 10, 15, 17, 1))
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({**TEST_CONFIG, 'markets': {'NASDAQ': {'symbols': list(cfg.symbols)}}}), encoding='utf-8')
+    at = run_app()
+    components = '\n'.join(node.proto.json for node in at.get('bidi_component'))
+    assert 'Showing saved data from NYSE' in components
+    assert any('NYSE (America/New_York)' in c.value for c in at.caption)

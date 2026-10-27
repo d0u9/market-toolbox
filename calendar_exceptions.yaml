@@ -1,13 +1,9 @@
-# Confirmed market closures and special close times, keyed by US/Eastern
-# market date. Only confirmed exchange closures belong here; never use this
-# file to hide dates a data provider failed to deliver.
-#
-# closures:
-#   - date: "2099-01-02"
-#     reason: "Example: unscheduled exchange closure"
-# early_closes:
-#   - date: "2099-01-03"
-#     close_time: "13:00"   # America/New_York
-#     reason: "Example: special early close"
-closures: []
-early_closes: []
+# Keys are exact calendar group names from config.json (aliases are preserved).
+# Dates and close_time use that calendar's local timezone; times have no offset.
+# Only confirmed exchange exceptions belong here, never provider data gaps.
+# NASDAQ:
+#   closures:
+#     - {date: "2099-01-02", reason: "Example confirmed closure"}
+#   early_closes:
+#     - {date: "2099-01-03", close_time: "13:00", reason: "Example early close"}
+{}

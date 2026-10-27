@@ -9,6 +9,7 @@ from pathlib import Path
 import signal
 import sys
 import threading
+import time
 
 from config import Config, ConfigError, load_config
 import worker
@@ -66,12 +67,18 @@ def main() -> int:
     except ConfigError as exc:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
-    logging.basicConfig(level=cfg.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.Formatter.converter = time.gmtime
+    logging.basicConfig(level=cfg.log_level, format="%(asctime)sZ %(levelname)s %(name)s: %(message)s")
 
     # Streamlit's server API is internal; keep its use here and verify it
     # against the version pinned in requirements.lock.
     from streamlit.web import bootstrap
     from streamlit.web.server import Server
+    from streamlit import config as streamlit_config
+
+    script = str(Path(__file__).with_name("app.py"))
+    # The CLI normally sets this before loading project theme/static settings.
+    streamlit_config._main_script_path = script
 
     bootstrap.load_config_options({
         "server_headless": True,
@@ -81,7 +88,7 @@ def main() -> int:
     })
 
     async def start() -> int:
-        server = Server(str(Path(__file__).with_name("app.py")), is_hello=False)
+        server = Server(script, is_hello=False)
         return await serve(cfg, server)
 
     return asyncio.run(start())
