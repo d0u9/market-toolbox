@@ -15,6 +15,7 @@ def test_read_only_connection_cannot_write(tmp_path):
     path = tmp_path / "data" / "m.sqlite3"
     storage.connect_rw(path).close()
     ro = storage.connect_ro(path)
+    assert storage.get_meta(ro, 'schema_version') == '1'
     with pytest.raises(sqlite3.OperationalError):
         ro.execute("INSERT INTO meta(key, value) VALUES ('x', 'y')")
     ro.close()
@@ -97,7 +98,7 @@ def test_lock_released_when_holder_crashes(tmp_path):
         pass
 
 
-def test_old_schema_is_rejected_without_rewriting_data(tmp_path):
+def test_old_layout_with_same_version_is_rejected_without_rewriting_data(tmp_path):
     path = tmp_path / 'old.sqlite3'
     with sqlite3.connect(path) as conn:
         conn.execute('CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)')

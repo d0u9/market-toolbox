@@ -111,12 +111,13 @@ exchange announcements and maintain exceptions when necessary.
 
 ### Database and configuration compatibility
 
-The current schema is version 2. It requires grouped configuration; the old
+The first release uses schema version 1 and grouped configuration. The old
 `symbols`, `market_calendar` and global `update_delay_minutes` keys are rejected.
-Schema 1 databases are rejected without modification. No automatic migration,
+Databases from earlier provisional layouts are rejected without modification,
+even if their version marker is also 1. No automatic migration,
 delete, reset or dual-format compatibility is provided. For an existing setup,
 stop the old process, update the private config, and select a fresh `sqlite_path`
-(such as `data/market-v2.sqlite3`) before restarting. Keep or remove old files
+(such as `data/market-fresh.sqlite3`) before restarting. Keep or remove old files
 separately as needed; the application never clears them itself.
 
 ## Run locally

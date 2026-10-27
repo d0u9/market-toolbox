@@ -21,7 +21,7 @@ every symbol listed by a provider.
 | Portability | Python 3.13, POSIX locks isolated in locking.py, explicit UTF-8, paths relative to the selected config. Runtime loads project Streamlit settings outside the repository working directory. No platform-specific image pin. |
 | Deployment | Bind address, port and paths come from config. Container mappings must match the configured port. Example loopback addresses and port 8501 are generic deployment examples. |
 | Time storage | UTC instants and explicit timezone-aware datetimes. Logs, retention and export dates use UTC rather than a particular market's date. |
-| Compatibility | Schema 2 and grouped config require a fresh database. Old databases are refused without automatic rewriting or deletion. |
+| Compatibility | The first release retains schema version 1 with the redesigned layout and grouped config. Earlier provisional layouts require a fresh database; no automatic rewriting or deletion is performed. |
 
 Verification uses deterministic synthetic data and temporary databases. Tests
 never request real market data. They check US, China and Australia session

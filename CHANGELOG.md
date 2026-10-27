@@ -20,7 +20,8 @@ Use the `markets` groups in the demo config as the configuration format. The
 old top-level `symbols`, `market_calendar` and `update_delay_minutes` keys are
 no longer accepted. Calendar exceptions are grouped by the same calendar names.
 
-Schema 2 requires a fresh database. Schema 1 databases are rejected without
+The redesigned database remains schema version 1 for this first release.
+It requires a fresh database; earlier provisional layouts are rejected without
 automatic migration, rewriting or deletion. Before restarting an existing
 deployment, update its private config and select a fresh `sqlite_path`.
 

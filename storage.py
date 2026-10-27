@@ -18,7 +18,7 @@ import pandas as pd
 
 from services import status
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 1
 BUSY_TIMEOUT_MS = 10_000
 SNAPSHOT_RUN_RETENTION_DAYS = 90
 EXPORT_KEEP = 7
@@ -179,6 +179,15 @@ def check_schema(conn: sqlite3.Connection) -> None:
     if version != str(SCHEMA_VERSION):
         raise SchemaError(f"Database schema {version!r} is unsupported; expected {SCHEMA_VERSION}. "
                           "Use a fresh database path. Existing data was not changed.")
+    try:
+        conn.execute("SELECT market, exceptions_text, exceptions_version, error FROM market_state LIMIT 0")
+        conn.execute("SELECT market, market_timezone, calendar_version, normalization_version, "
+                     "quote_currency FROM snapshots LIMIT 0")
+        conn.execute("SELECT market FROM symbol_state LIMIT 0")
+        conn.execute("SELECT market FROM update_runs LIMIT 0")
+    except sqlite3.OperationalError:
+        raise SchemaError("Database layout does not match this release. Use a fresh database path. "
+                          "Existing data was not changed.") from None
 
 
 @contextlib.contextmanager
